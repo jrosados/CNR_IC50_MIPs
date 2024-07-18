@@ -6,12 +6,12 @@ COI_calls.csv file was generated using R package RealMcCoil(v.1.3.1).
 
 R markdown files (.Rmd) contain scripts to perform the following analysis:
 
-#1.- Data processing from MIP to csv databases
-	1.1 - Data processing from MIP wrangling to csv databases
-	1.2 - Merging genotype database with IC50 database and COI data
-	1.2 - Coverage heatmap 
-	1.3 - COI distribution
-	1.4 - Parasitemia distribution
+# 1.- Data processing from MIP to csv databases
+	# 1.1 - Data processing from MIP wrangling to csv databases
+	# 1.2 - Merging genotype database with IC50 database and COI data
+	# 1.2 - Coverage heatmap 
+	# 1.3 - COI distribution
+	# 1.4 - Parasitemia distribution
 
 #2.- Epidemiological data
 	2.1 - Epitable
