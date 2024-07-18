@@ -1,0 +1,357 @@
+---
+title: "Data processing from MIP to csv databases"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(table1)
+library(miplicorn)
+library(ggplot2)
+library(cowplot)
+library(ggpubr)
+library(here)
+library(ComplexHeatmap)
+library(heatmaply)
+library(magick)
+```
+
+# Introduction
+
+This R Markdown document was written by Jason Rosado using data generated during his visit to Jeff Bailey laboratory at Brown University, with help of Abebe Fola and Rebecca Crudale. This work is lead by Jerome Clain (IRD/ Universite Paris Cite) <https://umr-merit.ird.fr/en/axes-et-projets/meds/>, Sandrine Houze (IRD/CNR)<https://cnr-paludisme.fr/> and Jeff Bailey (Brown University) <https://baileylab.org/>. 
+
+For more details on MIPs for Drug Resistance see <https://doi.org/10.1093/infdis/jiy223>.
+
+DR2 MIP panel was used on 830 DNA samples (10 plates). The DR2 MIP panel covered 43 genes, from which 13 genes have been associated with drug resistance. 815 probes targeting different loci across resistance genes.
+
+# Merging coverage and genotype MIP data
+Merge tables of reference aminoacids, alternative aminoacids and coverage. 
+To merge these data we use the built-in function in **miplicorn** <https://github.com/bailey-lab/miplicorn>
+
+We are removing samples with less than 3 UMI coverage. Now we have: Number of individuals = 813; Mutation_name= 4109 ; Number of genes = 43. Genotype is classified as 'wild-type' or '0' if min_freq of alternative allele is <0; 'mutant'  or '2' if min_freq of alternative allele is '>=1'; 'mixed genotype' or 1 if  min_freq>'0' & min_freq<'1' 
+```{r, echo=FALSE, message=FALSE}
+#FILES PATH
+ref_file <- (here("raw_data", "reference_AA_table.csv")) 
+alt_file <- (here("raw_data","alternate_AA_table.csv"))
+cov_file <- (here("raw_data","coverage_AA_table.csv"))
+
+data_all_plates<- read_tbl_ref_alt_cov(ref_file,
+                                alt_file,
+                                cov_file) %>% # We filtered out the positive and negative contrlos included in the sequencing run
+  filter(!sample %in% c("3D7-4000p-CNR-1","3D7-2000p-CNR-1", 
+                        "3D7-1000p-CNR-1", "3D7-500p-CNR-1", "3D7-200p-CNR-1",
+                        "3D7-100p-CNR-1", "3D7-50p-CNR-1", "3D7-10p-CNR-1",
+                        "NTC-CNR-1", "NTP-CNR-1"), #coverage = minimun number of UMI reads
+         coverage >=3 )  %>% 
+  mutate(aa_change = convert_three(aa_change),  #this allows to convert to nomenclature of three amino acids
+        min_freq = alt_umi_count/(alt_umi_count+ref_umi_count), #estimates the proportion of alternative allele in case of mixed genotype samples
+        across(min_freq, ~replace(.,is.nan(.),0 )) ,
+      #genotype is classified as 'wild-type' or '0' if min_freq of alternative allele is <0; 'mutant'  or '2' if min_freq of alternative allele is '>=1'; 'mixed genotype' or 1
+        genotype = case_when(min_freq<="0" ~"0",
+        min_freq>="1" ~ "2",
+        min_freq>"0" & min_freq<"1" ~ "1")) 
+
+```
+
+
+```{r}
+dir.create("intermediate_data")
+dir.create("figures")
+dir.create("tables")
+
+write_rds(data_all_plates, "intermediate_data/MIP_data_all_plates.rds", "xz")
+```
+
+## Plot average coverage
+First step is to check the coverage per barcode. The expected number of reads per sample is: 815 (probes) * 100 (ideal number of reads) = 81,500 reads; but we could also work with 815 *10 = 8,150 reads per sample. 
+Some samples perform very poorly for one reason or another. This library have been repooled at a higher volume already.The samples with a total barcode count of 100 is considered low covered.
+```{r, echo=FALSE}
+plot_coverage<- plot_coverage(data_all_plates, group_by = gene) +
+  ylab("mean coverage per sample")
+print(plot_coverage)
+ggsave("figures/plot_coverage.pdf", units="cm", width=20, 
+       height=15, dpi=300)
+
+
+```
+
+##Mean coverage table
+```{r}
+table1(~  mean_coverage
+     , data = plot_coverage$data)
+```
+
+```{r,echo=FALSE, message=FALSE}
+merged_genotype <- data_all_plates %>%
+  dplyr::select( mutation_name,sample,gene_id,gene, 
+          aa_change,min_freq,genotype) %>%
+  mutate(sample = as.numeric(sub("-CNR-1", '',sample))) %>%
+  unique()
+
+```
+
+## Load genotype data: Include mutation frequency >1% and exclude duplicated mutation names
+We started with 4109 'mutation names'. After excluding mutations with <1% frequency we ended up with 1201 mutations.
+
+```{r, echo=FALSE, warning=FALSE}
+
+#We modify the sample name in the genotypes table to match with the original database IC50_CNR
+genotype_modified <- 
+  data_all_plates %>%
+  dplyr::select(mutation_name,sample,gene_id, gene, aa_change,min_freq,genotype) %>%
+  mutate(sample = as.numeric(sub("-CNR-1", '',sample))) %>%
+  #Most of duplicated mutation names have missing data
+  #we are filtering the mutation names that are in the dataframe mutation frequency with >1% frequency
+  rename(mutation = mutation_name) %>%
+  group_by(sample, mutation) %>%
+  distinct(sample, mutation, .keep_all = T) %>%
+  dplyr::select(!c(gene,gene_id, aa_change, min_freq)) %>%
+  mutate(genotype = as.integer(genotype)) %>%
+  pivot_wider(names_from = mutation, values_from = genotype)
+
+```
+
+
+## Load CNR database
+```{r, echo=FALSE, message=FALSE}
+
+CNR_IC50_epidata <- read.csv(here("raw_data","CNR_IC50_epidata.csv")) 
+
+```
+
+## Load COI data
+Loading estimated COI of samples  
+```{r}
+COI_data<- read.csv(here("raw_data","COI_calls.csv")) %>%
+  rename(median_coi = median,
+         sample =  sample_names) %>%
+  dplyr::select(sample, median_coi)
+```
+
+## Merge MIP data, COI data and CNR database
+At this point we have 1201'mutation name'. This is the reference database for prevalence and other analysis
+```{r, echo=FALSE, message=FALSE}
+#This is the reference database for prevalence and other analysis
+
+IC50_genotype<- CNR_IC50_epidata %>%
+  inner_join(genotype_modified, by = "sample") %>%
+  inner_join(COI_data, by = "sample")
+```
+
+
+```{r, echo=F, eval=F}
+write_rds(IC50_genotype,"intermediate_data/IC50_genotype.rds", "xz")
+
+```
+
+##Plot coverage heatmap
+#Loading barcode counts
+```{r}
+barcode_file <- read.csv(here("raw_data","barcode_counts.csv")) %>%
+  rename(sample_ID = MIP) %>%
+  filter(!c(sample_ID =="Sample ID" | sample_ID =="Copy")) %>%
+  pivot_longer(!sample_ID, names_to = "MIP", values_to = "UMI") %>%
+  mutate(UMI = as.numeric(UMI),
+         sample_ID = as.numeric(sub("-CNR-1", '',sample_ID))) %>%
+  mutate(MIP = str_replace_all(MIP,"[\\.]|([\\.]?=[\\_])|([\\.]?=[\\_])","_")) %>%
+  #removing mips that never went sequenced (they have Zero read counts)
+filter(!c(MIP=="pfabcI3_S0_Sub0_mip35" |MIP=="pfv_atpase_S0_Sub0_mip4" | MIP=="pfpi4k_S0_Sub0_mip19" |  MIP=="pfpi4k_S0_Sub0_mip32"))
+   
+```
+
+# Filtering only samples with good sequencing data
+```{r}
+barcode_file <- barcode_file %>%
+  filter(sample_ID %in% IC50_genotype$sample)
+```
+
+# Loading MIPs used for this sequencing run
+```{r}
+MIPs <- read.csv(here("raw_data","all_haplotypes.csv"))%>%
+  dplyr::select(MIP, Gene) %>%
+  mutate(MIP = str_replace_all(MIP,"[\\-]|([\\-]?=[\\_])|([\\-]?=[\\_])","_"))%>%
+  unique() %>%
+  rename(gene = Gene) 
+```
+
+#Creating parasitemia classes from database
+```{r, warning=FALSE}
+sample_parasitemia<- IC50_genotype %>%
+  select(sample, parasitemia) %>%
+  rename(sample_ID = sample) %>%
+  mutate(parasitemia =  as.numeric(parasitemia),
+         parasitemia = cut_number(parasitemia, 6))
+  
+```
+
+#Coverage Heatmap/Probes/Samples
+```{r}
+MIP_key_genes<-MIPs %>%
+  mutate(gene = case_when(gene=="dhfr-ts" ~ "dhfr-ts",
+                          gene=="mdr1" ~ "mdr1",
+                          gene =="crt" ~ "crt",
+                          gene =="dhps" ~ "dhps",
+                          gene =="k13" ~ "k13",
+                          TRUE ~ "others"
+                          ))
+```
+
+
+```{r}
+pheat_data <- barcode_file %>%
+                     group_by(sample_ID, MIP) %>%
+                     summarise(
+                       count = log10(sum(UMI) + 1)
+                     ) %>%
+  filter(MIP %in% MIP_key_genes$MIP) %>%
+                     ungroup() %>%
+                     pivot_wider(
+                       names_from = MIP,
+                       values_from = count
+                     ) %>% as.data.frame()
+  
+  rownames(pheat_data) <- pheat_data$MIP
+  
+  # Annotation color
+  annotation2 <- sample_parasitemia %>% select(sample_ID, parasitemia)
+  rownames(annotation2) <- annotation2$sample_ID
+  rowname_anno2 <- rownames(annotation2)
+  annotation2 <- data.frame(parasitemia = annotation2$parasitemia)
+  rownames(annotation2) <- rowname_anno2
+
+  
+  
+  pheat_data <- pheat_data[, -1]
+  annotation <- data.frame(MIP = colnames(pheat_data))
+  annotation <- annotation %>%
+    left_join(
+      (MIP_key_genes %>%
+         select(MIP, gene)),
+      by = join_by(MIP)
+    ) %>%
+    filter(!is.na(gene)) %>%
+    as.data.frame()
+  rownames(annotation) <- annotation$MIP
+  rowname_anno <- rownames(annotation)
+  annotation <- data.frame(gene = annotation$gene)
+  rownames(annotation) <- rowname_anno
+ 
+  
+  # Color 
+  suppressMessages(pal_info <- annotation %>%
+                     select(gene) %>%
+                     distinct() %>%
+                     mutate(colour = scales::hue_pal()(n())) %>%
+                     with(setNames(colour, gene)))
+  
+  pal_info <- list(
+    gene = pal_info
+  )
+  
+  suppressMessages(parasitemia <- annotation2 %>%
+                     select(parasitemia) %>%
+                     distinct() %>%
+                     mutate(colour = scales::brewer_pal()(n())) %>%
+                     with(setNames(colour, annotation2)))
+  
+  parasitemia <- list(
+    parasitemia = parasitemia
+  )
+  
+  pheat_data[is.na(pheat_data)] <- 0
+  col <- colorRampPalette(rev(RColorBrewer::brewer.pal(n = 7, name = "RdYlBu")))(100)
+  
+  col <- c("#BEBEBE", col)
+ 
+  
+  pdf("figures/MIP_UMI.pdf", width=8, height=7)
+
+  
+  ht1 = ComplexHeatmap::pheatmap(t(pheat_data),
+                           name = "Log10(UMI + 1)",
+                           row_title = "MIP",
+                           color = col,
+                           column_title = "sample",
+                           show_rownames = FALSE,
+                           show_colnames = FALSE,
+                           row_split = annotation$gene,
+                           annotation_colors = pal_info,
+                           annotation_row = annotation,
+                           annotation_col = annotation2,
+                           cluster_rows = FALSE,
+                           cluster_cols = TRUE,
+                           use_raster = TRUE,
+                           raster_by_magick = TRUE,
+                           raster_magick_filter = "Bartlett"
+  )
+  
+  draw(ht1, row_sub_title_side = "left")
+  dev.off()
+
+
+```
+
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+MOI<- IC50_genotype %>%
+  dplyr::select(median_coi) %>%
+  ggplot(aes(median_coi)) +
+  geom_bar(position = position_dodge2(width = 1, preserve = "single")) + 
+  ggtitle("") +
+  xlab("COI") + ylab("Frequency") +
+  scale_fill_brewer(palette="Paired") + scale_x_continuous(breaks = seq(1, 12, 1))+
+  theme_classic(base_size = 12)  
+
+print(MOI)
+ggsave("figures/COI_dist.pdf", units="cm", width=10, height=10, dpi=300)
+
+parasite_hist<- IC50_genotype %>%
+  mutate(parasitemia = as.numeric(parasitemia)) %>%
+  dplyr::select(parasitemia) %>%
+  ggplot(aes(parasitemia)) +
+  geom_histogram(
+    position = position_dodge2(width = 0.9, preserve = "single")
+    ) +
+  ggtitle("") +
+  xlab("Parasitemia (% iRBC)") + ylab("Frequency") +
+  scale_fill_brewer(palette="Paired") +
+  theme_classic(base_size = 12)  
+
+
+print(parasite_hist)
+ggsave("figures/parasite_hist.pdf", units="cm", width=10, height=10, dpi=300)
+
+
+```
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/data_cleaning.RData")
+```
+
+
+
+
+

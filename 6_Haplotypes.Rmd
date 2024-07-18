@@ -1,0 +1,934 @@
+---
+title: "Haplotypes"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(table1)
+library(miplicorn)
+library(ggplot2)
+library(cowplot)
+library(ggpubr)
+library(ComplexUpset)
+library(colorspace)
+library(extrafont)
+library(here)
+library(ggtext)
+library(tableone)
+windowsFonts("Courier New" = windowsFont("Courier New"))
+ 
+
+```
+
+# Merging coverage and genotype MIP data
+Merge tables of reference aminoacids, alternative aminoacids and coverage. 
+To merge these data we use the built-in function in **miplicorn** <https://github.com/bailey-lab/miplicorn>
+
+We are removing samples with less than 3 UMI coverage. Now we have: Number of individuals = 813; Mutation_name= 4109 ; Number of genes = 43. We are defining major clones those clones that are >75% of allele frequency. Pure Mutant are those genotype where ALT AF>75. Wild type are those genotype where ALT AF<25%. Mixed infections are those with ALT AF :25-75%. For haplotype estimation, we consider those genotypes with major clone (i.e. ALT AF>75% and ALT AF<25%).
+```{r, echo=FALSE, message=FALSE}
+#FILES PATH
+ref_file <- (here("raw_data","reference_AA_table.csv"))
+alt_file <- (here("raw_data","alternate_AA_table.csv"))
+cov_file <- (here("raw_data","coverage_AA_table.csv"))
+
+data_all_plates_hap<- read_tbl_ref_alt_cov(ref_file,
+                                alt_file,
+                                cov_file) %>%
+  filter(!sample %in% c("3D7-4000p-CNR-1","3D7-2000p-CNR-1",
+                        "3D7-1000p-CNR-1", "3D7-500p-CNR-1", "3D7-200p-CNR-1",
+                        "3D7-100p-CNR-1", "3D7-50p-CNR-1", "3D7-10p-CNR-1",
+                        "NTC-CNR-1", "NTP-CNR-1"),
+         coverage >=3
+         )  %>% mutate(aa_change = convert_three(aa_change),
+                                   min_freq = alt_umi_count/(alt_umi_count+ref_umi_count),
+                                   across(min_freq, ~replace(.,is.nan(.),0 )) ,
+                                   genotype = case_when(min_freq >= 0.75 ~ "2",
+                                   min_freq < 0.75 & min_freq >= 0.25 ~ "1",
+                                   min_freq < 0.25 & min_freq>= 0 ~ "0"))
+
+write_rds(data_all_plates_hap,"intermediate_data/data_all_plates_hap.rds", "xz")
+
+```
+
+
+## Load genotype data: we are including all kinds of mutation frequency but exclude duplicated mutation names. **We excluded mixed genotypes for the haplotype estimation**
+
+```{r, echo=FALSE, warning=FALSE}
+
+#We modify the sample name in the genotypes table to match with the original database IC50_CNR
+genotype_modified_AF <- 
+  data_all_plates_hap %>%
+  dplyr::select(mutation_name,sample,gene_id, gene, aa_change,min_freq,genotype) %>%
+  mutate(sample = as.numeric(sub("-CNR-1", '',sample))) %>%
+   rename(mutation = mutation_name) %>%
+   group_by(sample, mutation) %>%
+  distinct(sample, mutation, .keep_all = T) %>%
+  dplyr::select(!c(gene,gene_id, aa_change, min_freq)) %>%
+  mutate(genotype = as.integer(genotype)) %>%
+  filter(!genotype=="1") %>%
+  pivot_wider(names_from = mutation, values_from = genotype)
+
+
+
+```
+We started with 4109 'mutation names'. If we exclude mutations with <1% frequency we would end up with 1201 mutations. We are not exluding anything just for the purpose of estimating prevalence.
+
+## Load CNR database
+```{r, echo=FALSE, message=FALSE}
+
+CNR_IC50_epidata <- read.csv(here("raw_data","CNR_IC50_epidata.csv")) %>%
+  mutate(sample = as.character(sample))
+
+```
+
+## Editing genotype codes to run SNPassoc.
+We are including ALL monoclonal and polyclonal samples for this exploratory analysis. Excluding duplicated mutation names. For SNPassoc Format: Homozygous should be coded as 0 (wt), heterozygous as 1 and mutant homozygous as 2, and missing are coded as NA 
+```{r, echo=FALSE, message=FALSE}
+#We don't remove samples or mutation names, n = 830/Mutation name= 4110
+
+long_format_genotype_AF<-  genotype_modified_AF %>%
+  pivot_longer(!c(sample), names_to = "mutation_name", values_to = "genotype") %>% 
+#SNPassoc Format: Homozygous should be coded as 0 (wt), heterozygous as 1 and mutant homozygous as 2, and missing are coded as NA
+  #removing duplicated sample id
+  group_by(sample, mutation_name) %>%
+  distinct(sample, mutation_name, .keep_all = T)
+
+```
+
+## Check for duplicates: No duplicates
+```{r, echo=FALSE, message=FALSE}
+   long_format_genotype_AF%>%
+   dplyr::group_by(sample,mutation_name) %>%
+   dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+   dplyr::filter(n > 1L) 
+
+```
+
+
+### We are removing mutation names with percentages of missing value >= 60%.
+```{r, echo=FALSE,message=FALSE}
+genotype_format_filtered_AF<-
+  long_format_genotype_AF %>% 
+  #We don't want duplicated sample and mutation name
+  unique() %>%
+  #Change format to be able to count for NA per mutation
+  pivot_wider(names_from = sample, values_from = genotype) %>% 
+  rowwise() %>%
+  #We count the percentage of NA per mutation names 
+  mutate(NA_percent = sum(is.na(across(everything())))/length(.),
+         NAs_s = sum(is.na(across(everything())))) %>%
+  #We remove mutation names with missing percentage >= 60%
+  filter(NA_percent <0.30) %>%
+  #We are removing NAs_S and NA_percent as we don't need them anymore
+  dplyr::select(!c(NA_percent,NAs_s)) %>%
+  pivot_longer(cols = !mutation_name) %>%
+  pivot_wider(names_from = "mutation_name", values_from = "value") %>%
+    rename(sample = name)
+  
+
+```
+
+## Merge MIP data and CNR database
+At this point we have 4109'mutation name'. This is the reference database for prevalence and other analysis
+```{r, echo=FALSE, message=FALSE}
+#This is the reference database for prevalence and other analysis
+IC50_genotype_hap<- CNR_IC50_epidata %>%
+  inner_join(genotype_format_filtered_AF, by = "sample") 
+```
+
+
+### Selecting phenotypic data
+Only those sample names from upstream selection (n = 813). 
+```{r, echo=FALSE,message=FALSE}
+phenotypic_data_cont_hap<- IC50_genotype_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine,MDAQ,chloroquine,piperaquine,year,country) 
+
+```
+
+### Merging data genotype and phenotype
+Only those sample names from upstream selection (n = 813)
+```{r, echo=FALSE,message=FALSE}
+glm_database_cont_hap<- genotype_format_filtered_AF %>%
+  #mutate(sample =  as.numeric(sample)) %>%
+  inner_join(phenotypic_data_cont_hap, by = "sample") 
+
+write_rds(glm_database_cont_hap,"intermediate_data/glm_database_cont_hap.rds", "xz")
+
+```
+
+# CRT haplotypes 
+```{r, echo=FALSE, message=FALSE}
+CRT_haplotypes_associa<- glm_database_cont_hap %>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country, 
+    #`crt-Cys72Ser`,
+    `crt-Met74Ile`,`crt-Asn75Glu`,`crt-Lys76Thr`, 
+    `crt-Ala220Ser`, `crt-Gln271Glu`, `crt-Asn326Ser`, `crt-Ile356Thr`, `crt-Arg371Ile`
+    ) %>%
+   drop_na() 
+
+```
+
+
+```{r, echo=FALSE,message=FALSE}
+CRT_haplotypes_freq<- CRT_haplotypes_associa %>% 
+  rowwise() %>%
+  mutate(`crt-Met74Ile` = ifelse(`crt-Met74Ile`==0,"M","I"),
+         `crt-Asn75Glu` = ifelse(`crt-Asn75Glu`==0, "N", "E"),
+         `crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "K", "T"),
+         `crt-Ala220Ser` = ifelse(`crt-Ala220Ser`==0, "A", "S"),
+         `crt-Gln271Glu` =ifelse(`crt-Gln271Glu`==0, "Q", "E"),
+         `crt-Asn326Ser` =ifelse(`crt-Asn326Ser`==0, "N", "S"),
+         `crt-Ile356Thr` =ifelse(`crt-Ile356Thr`==0, "I", "T"),
+         `crt-Arg371Ile` =ifelse(`crt-Arg371Ile`==0, "R", "I")
+         ) %>%
+  rowwise()%>%
+  unite("haplotype",10:ncol(.),sep =" ", remove = F) %>%
+  mutate(haplotype =  case_when(haplotype =="M N K A Q N I R" ~ "Wild-type",
+         TRUE ~ as.character(haplotype)))
+
+CRT_haplotypes_freq_plot<-
+CRT_haplotypes_freq %>%
+group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>% 
+  mutate(haplotype = case_when(freq<"0.007" ~ "Freq <0.7%",
+                               TRUE ~ as.character(haplotype))) %>%
+  group_by(haplotype) %>%
+ggplot(aes(x="", y=n, fill=haplotype)) +
+  geom_bar(stat="identity", width=1, color="black", 
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette =  "Set3") +
+  theme_void() +  ggtitle("PfCRT") + 
+  labs(subtitle = "n = 487",
+    fill = "Haplotype\naa 74 75 76 220 271 326 356 371") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) 
+
+
+```
+
+## Distribution of CRT haplotypes in African countries
+```{r, echo=FALSE,message=FALSE}
+#library(forcats)
+CRT_haplotypes_distr <-
+CRT_haplotypes_freq %>%
+filter(country=="Ivory Coast" | country== "Cameroon" | country== "Mali" |
+           country== "Guinea" | country== "Republic of the Congo" | 
+         country=="Senegal" | country=="Central African Republic" | 
+         country=="Chad" | country=="Benin" |country=="Gabon") %>%
+  mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad","Benin", "Gabon" ),
+                           labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad","Benin", "Gabon"))) %>%
+group_by(country, haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) 
+
+CRT_haplotypes_distr_tab<- CRT_haplotypes_freq %>%
+filter(country=="Ivory Coast" | country== "Cameroon" | country== "Mali" |
+           country== "Guinea" | country== "Republic of the Congo" | 
+         country=="Senegal" | country=="Central African Republic" | 
+         country=="Chad" | country=="Benin" |country=="Gabon") %>%
+  mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad","Benin", "Gabon" ),
+                           labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad","Benin", "Gabon"))) 
+
+CRT_haplotypes_distr_table<- table1(~  haplotype| country 
+     , data = CRT_haplotypes_distr_tab )
+
+write.table (CRT_haplotypes_distr_table , "tables/CRT_haplotypes_distr.csv", col.names = T, row.names=F, append= T, sep=',')
+
+```
+
+## Frequency distribution of the pfcrt haplotypes in the ten most visited countries by (plot)
+```{r, echo=FALSE,message=FALSE}
+
+CRT_haplotypes_dist_plot<- 
+CRT_haplotypes_freq %>%
+filter(country=="Ivory Coast" | country== "Cameroon" | country== "Mali" |
+           country== "Guinea" | country== "Republic of the Congo" | 
+         country=="Senegal" | country=="Central African Republic" | 
+         country=="Chad" | country=="Benin" |country=="Gabon") %>%
+  mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Chad", "Central African Republic", "Gabon", "Benin"),
+                           labels = c("Côte d'Ivoire (128)","Cameroon (104)","Mali (46)", "Guinea (36)","Republic of the Congo (23)", "Senegal (19)",  "Chad (18)","Central African Republic (14)","Gabon (13)","Benin (12)" ))) %>%
+group_by(country, haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>% 
+  group_by(haplotype) %>%
+ggplot(aes(x="", y=n, fill=haplotype)) +
+  geom_bar(stat="identity", width=1, color="black", 
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette =  "Set3") +
+  theme_void() +  ggtitle("") + 
+  labs(fill = "Haplotype\naa 74 75 76 220 271 326 356 371") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) +
+  facet_wrap(~ country)
+
+print(CRT_haplotypes_dist_plot)
+ggsave("figures/CRT_haplotypes_dist_plot.pdf", device = cairo_pdf, units="cm", width=25.14, height=15.12, dpi=300)
+```
+
+## Effect of pfcrt haplotypes in IC50 for six drugs
+```{r, echo=FALSE,message=FALSE}
+CRT_haplotypes_IC_association<- CRT_haplotypes_freq %>%
+  select(haplotype, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ) %>%
+  mutate(haplotype = as.factor(haplotype)) %>%
+  inner_join(CRT_haplotypes_freq_plot$data %>% select(haplotype), by ="haplotype") %>%
+  group_by(haplotype) %>%
+  #Generate plots by of IC50 by six drugs
+  pivot_longer(!c(haplotype), names_to = "drugs", values_to = "IC50") %>%
+  ggplot(aes(haplotype, IC50,fill =haplotype)) + 
+   geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+    geom_signif(comparisons = list(c("I E T S E N I I", "Wild-type"), c("I E T S E N T I", "Wild-type"),c("I E T S E N I I", "I E T S E N T I")), 
+              map_signif_level=TRUE ) +
+  scale_y_log10() +
+   ylab("IC50(nM)") + xlab("PfCRT haplotypes") +
+ggtitle("") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+labs(subtitle = "n = 487",
+    fill = "Haplotype\naa 74 75 76 220 271 326 356 371") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) +
+  facet_wrap(~drugs)
+
+print(CRT_haplotypes_IC_association)
+ggsave("figures/CRT_haplotypes_IC_association.pdf", device = cairo_pdf, units="cm", width=22.14, height=15.12, dpi=300)
+```
+
+## Kruskall wallis for effect of pfcrt haplotypes in IC50 for six drugs
+```{r,echo=FALSE,message=FALSE}
+CRT_haplotypes_stats<- CRT_haplotypes_freq %>%
+  select(haplotype, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ) %>%
+  mutate(haplotype = as.factor(haplotype)) %>%
+  #Filter haplotypes with frequency > 0.7% to avoid rare haplotypes
+  inner_join(CRT_haplotypes_freq_plot$data %>% select(haplotype), by ="haplotype") %>%
+  group_by(haplotype)
+
+
+kruskal.test(CRT_haplotypes_stats$Chloroquine, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Chloroquine,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(CRT_haplotypes_stats$Lumefantrine, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Lumefantrine,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(CRT_haplotypes_stats$Dihydroartemisinin, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Dihydroartemisinin,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(CRT_haplotypes_stats$Mefloquine, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Mefloquine,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(CRT_haplotypes_stats$Monodesethylamodiaquine, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Monodesethylamodiaquine,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(CRT_haplotypes_stats$Piperaquine, CRT_haplotypes_stats$haplotype)
+pairwise.wilcox.test(CRT_haplotypes_stats$Piperaquine,CRT_haplotypes_stats$haplotype, p.adjust.method = "BH")
+```
+
+# DHFR haplotypes
+```{r, echo=FALSE,message=FALSE}
+
+DHFR_haplotypes_associa<- glm_database_cont_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country, 
+   `dhfr-ts-Asn51Ile`, `dhfr-ts-Cys59Arg`, `dhfr-ts-Ser108Asn`,`dhfr-ts-Ile164Leu`) %>%
+   drop_na()
+```
+
+```{r, echo=FALSE,message=FALSE}
+DHFR_haplotypes_freq<- DHFR_haplotypes_associa %>%
+  rowwise() %>%
+  mutate(`dhfr-ts-Asn51Ile` = ifelse(`dhfr-ts-Asn51Ile`==0,"N","I"),
+         `dhfr-ts-Cys59Arg` = ifelse(`dhfr-ts-Cys59Arg`==0, "C", "R"),
+         `dhfr-ts-Ser108Asn` = ifelse(`dhfr-ts-Ser108Asn`==0, "S", "N"),
+         `dhfr-ts-Ile164Leu` = ifelse(`dhfr-ts-Ile164Leu`==0, "I", "L")) %>%
+  rowwise()%>%
+  unite("haplotype",10:ncol(.),sep =" ", remove = F)  %>%
+  mutate(haplotype =  case_when(haplotype =="N C S I" ~ "Wild-type",
+         TRUE ~ as.character(haplotype)))
+  
+
+DHFR_haplotypes_freq_plot<-
+DHFR_haplotypes_freq %>%
+group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>%
+  mutate(haplotype = case_when(freq<"0.007" ~ "Freq <0.7%",
+                               TRUE ~ as.character(haplotype))) %>%
+ ggplot(aes(x="", y=n, fill=haplotype)) +
+  geom_bar(stat="identity", width=1, color="black",
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette =  "Set3") +
+  theme_void() +  ggtitle("PfDHFR") + 
+  labs(subtitle = "n = 657",
+    fill = "Haplotype\naa 51 59 108 164") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) 
+
+```
+
+
+# DHPS haplotypes
+```{r, echo=FALSE,message=FALSE}
+DHPS_haplotypes_associa<- glm_database_cont_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country, 
+   `dhps-Ser436Ala`,`dhps-Ala437Gly`,`dhps-Lys540Glu`, `dhps-Ala581Gly`) %>%
+   drop_na() 
+
+```
+
+```{r, echo=FALSE,message=FALSE}
+DHPS_haplotypes_freq<- DHPS_haplotypes_associa %>% 
+  rowwise() %>%
+  mutate(`dhps-Ser436Ala` = ifelse(`dhps-Ser436Ala`==0,"S","A"),
+         `dhps-Ala437Gly` = ifelse(`dhps-Ala437Gly`==0, "A", "G"),
+         `dhps-Lys540Glu` = ifelse(`dhps-Lys540Glu`==0, "K", "E"),
+         `dhps-Ala581Gly` = ifelse(`dhps-Ala581Gly`==0, "A", "G")) %>%
+  rowwise()%>%
+  unite("haplotype",10:ncol(.),sep =" ", remove = F) %>%
+  mutate(haplotype =  case_when(haplotype =="S A K A" ~ "Wild-type",
+         TRUE ~ as.character(haplotype)))
+
+
+DHPS_haplotypes_freq_plot<-
+DHPS_haplotypes_freq %>%
+group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>% 
+  mutate(haplotype = case_when(freq<"0.007" ~ "Freq <0.7%",
+                               TRUE ~ as.character(haplotype))) %>%
+  group_by(haplotype) %>% 
+  ggplot(aes(x="", y=n, fill= haplotype)) +
+  geom_bar(stat="identity", width=1, color="black", 
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette = "Set3")+
+  theme_void() +  ggtitle("PfDHPS") + 
+  labs(subtitle = "n = 657",
+    fill = "Haplotype\naa 436 437 540 581") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm"))  
+
+```
+
+# DHPS-DHFR haplotypes
+```{r, echo=FALSE,message=FALSE}
+DHFR_DHPS_haplotypes_associa<- glm_database_cont_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country, `dhfr-ts-Asn51Ile`, `dhfr-ts-Cys59Arg`, `dhfr-ts-Ser108Asn`,
+   `dhps-Ala437Gly`,`dhps-Lys540Glu`) %>%
+   drop_na() 
+
+```
+
+```{r, echo=FALSE,message=FALSE}
+DHFR_DHPS_haplotypes_freq<- DHFR_DHPS_haplotypes_associa %>% 
+  rowwise() %>%
+  mutate(`dhfr-ts-Asn51Ile` = ifelse(`dhfr-ts-Asn51Ile`==0,"N","I"),
+         `dhfr-ts-Cys59Arg` = ifelse(`dhfr-ts-Cys59Arg`==0, "C", "R"),
+         `dhfr-ts-Ser108Asn` = ifelse(`dhfr-ts-Ser108Asn`==0, "S", "N"),
+         `dhps-Ala437Gly` = ifelse(`dhps-Ala437Gly`==0, "A", "G"),
+         `dhps-Lys540Glu` = ifelse(`dhps-Lys540Glu`==0, "K", "E")) %>%
+  rowwise()%>%
+  unite("haplotype",10:ncol(.),sep =" ", remove = F) %>%
+  mutate(haplotype =  case_when(haplotype =="N C S A K" ~ "Wild-type",
+         TRUE ~ as.character(haplotype)))
+
+DHFR_DHPS_haplotypes_freq_plot<-
+DHFR_DHPS_haplotypes_freq %>%
+group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>% 
+  mutate(haplotype = case_when(freq<"0.007" ~ "Freq <0.7%",
+                               TRUE ~ as.character(haplotype))) %>%
+  group_by(haplotype) %>%
+ggplot(aes(x="", y=n, fill=haplotype)) +
+  geom_bar(stat="identity", width=1, color="black", 
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette = "Set3") +
+  theme_void() +  ggtitle("PfDHFR - PfDHPS") + 
+  labs(subtitle = "n = 600",
+    fill = "Haplotype\naa 51 59 108 437 540") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) 
+```
+
+# MDR1 haplotypes
+```{r, echo=FALSE, message=FALSE}
+MDR1_haplotypes_associa<- glm_database_cont_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country, 
+   `mdr1-Asn86Tyr`,`mdr1-Tyr184Phe`,`mdr1-Asp1246Tyr`) %>%
+   drop_na() 
+```
+
+```{r, echo=FALSE,message=FALSE}
+MDR1_haplotypes_freq<- MDR1_haplotypes_associa%>% 
+  rowwise() %>%
+  mutate(`mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"N","Y"),
+         `mdr1-Tyr184Phe` = ifelse(`mdr1-Tyr184Phe`==0, "Y", "F"),
+         `mdr1-Asp1246Tyr` = ifelse(`mdr1-Asp1246Tyr`==0, "D", "Y")) %>%
+  rowwise()%>%
+  unite("haplotype",10:ncol(.),sep =" ", remove = F) %>%
+  mutate(haplotype =  case_when(haplotype =="N Y D" ~ "Wild-type",
+         TRUE ~ as.character(haplotype)))
+  
+
+freq_MDR1<-
+MDR1_haplotypes_freq %>%
+group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) 
+
+MDR1_haplotypes_freq_plot<-
+MDR1_haplotypes_freq %>%
+  group_by(haplotype) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(freq = n/sum(n)) %>%
+  arrange(desc(freq)) %>% 
+  group_by(haplotype) %>%
+  mutate(haplotype = case_when(freq<"0.007" ~ "Freq <0.7%",
+                               TRUE ~ as.character(haplotype))) %>%
+ggplot(aes(x="", y=n, fill=haplotype)) +
+  geom_bar(stat="identity", width=1, color="black", 
+            position = position_fill(reverse = TRUE)) +
+  coord_polar("y", start=0) + scale_fill_brewer(palette = "Set3") +
+  theme_void() +  ggtitle("PfMDR1") + 
+  labs(subtitle = "n = 621",
+    fill = "Haplotype\naa 86 184 1246") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) 
+```
+
+## Effect of pfmdr1 haplotypes in IC50 for six drugs
+```{r, echo=FALSE,message=FALSE}
+MDR1_haplotypes_IC_association<- MDR1_haplotypes_freq %>%
+  select(haplotype, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ) %>%
+  mutate(haplotype = as.factor(haplotype)) %>%
+  #Filter haplotypes with frequency > 0.7% to avoid rare haplotypes
+  inner_join(MDR1_haplotypes_freq_plot$data %>% select(haplotype), by ="haplotype") %>%
+  mutate(haplotype = fct_relevel(haplotype, c("Y F D", "N F D","Wild-type"))) %>%
+  group_by(haplotype) %>%
+  #Generate plots by of IC50 by six drugs
+  pivot_longer(!c(haplotype), names_to = "drugs", values_to = "IC50") %>%
+  ggplot(aes(haplotype, IC50,fill =haplotype)) + scale_y_log10() +
+   geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_signif(comparisons = list(c("Y F D", "Wild-type"), c("N F D", "Wild-type"),
+                                 c("Y F D", "N F D")), 
+              map_signif_level=TRUE ) +
+  ylab("IC50(nM)") + xlab("PfMDR1 haplotypes") +
+ggtitle("") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+   labs(subtitle = "n = 621",
+    fill = "Haplotype\naa 86 184 1246") + 
+  theme(plot.title = element_text(face = "bold", size = 14),
+        legend.text = element_text(size = 13, family = "Courier New"),
+        legend.title = element_text(size = 10, face = "bold"),
+        plot.subtitle = element_text(size = 13),
+        legend.key.height = unit(.5, "cm"),
+        legend.key.width = unit(.5, "cm")) +
+  facet_wrap(~drugs)
+
+print(MDR1_haplotypes_IC_association)
+ggsave("figures/MDR1_haplotypes_IC_association.pdf", device = cairo_pdf, units="cm", width=20.14, height=15.12, dpi=300)
+```
+
+## Kruskall wallis for effect of pfmdr1 haplotypes in IC50 for six drugs
+```{r, echo=FALSE,message=FALSE}
+MDR1_haplotypes_stats<- MDR1_haplotypes_freq %>%
+  select(haplotype, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ) %>%
+  mutate(haplotype = as.factor(haplotype)) %>%
+  #Filter haplotypes with frequency > 0.7% to avoid rare haplotypes
+  inner_join(MDR1_haplotypes_freq_plot$data %>% select(haplotype), by ="haplotype") %>%
+  group_by(haplotype)
+
+kruskal.test(MDR1_haplotypes_stats$Dihydroartemisinin, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Dihydroartemisinin,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(MDR1_haplotypes_stats$Lumefantrine, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Lumefantrine,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(MDR1_haplotypes_stats$Piperaquine, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Piperaquine,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(MDR1_haplotypes_stats$Mefloquine, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Mefloquine,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(MDR1_haplotypes_stats$Monodesethylamodiaquine, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Monodesethylamodiaquine,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+
+kruskal.test(MDR1_haplotypes_stats$Chloroquine, MDR1_haplotypes_stats$haplotype)
+pairwise.wilcox.test(MDR1_haplotypes_stats$Chloroquine,MDR1_haplotypes_stats$haplotype, p.adjust.method = "BH")
+```
+# Pie charts of pfdhfr, pfdhps, pfdhfr-pfdhps, pfmdr1 and pfcrt haplotypes
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+
+haplotypes_piechart<- ggdraw() +
+  draw_plot(DHFR_haplotypes_freq_plot, x = 0.005,y = 0.5, width = .33, height = 0.49) +
+  draw_plot(DHPS_haplotypes_freq_plot, x = 0.335,y = 0.5, width = .33, height = 0.49) +
+  draw_plot(DHFR_DHPS_haplotypes_freq_plot, x = 0.665,y = 0.5, width = .318, height = 0.49) +
+  draw_plot(MDR1_haplotypes_freq_plot, x = 0.005,y = 0, width = .33, height = 0.49) +
+  draw_plot(CRT_haplotypes_freq_plot, x = 0.52,y = 0, width = .40, height = 0.49) 
+
+print(haplotypes_piechart)
+ggsave("figures/haplotypes_piechart.pdf", device = cairo_pdf, units="cm", width=25.14, height=15.12, dpi=300)
+```
+# CRT_MDR1 Haplotypes
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+CRT_MDR1_haplotypes_associa<- glm_database_cont_hap%>%
+  select(sample, DHA, Lumefantrine, Mefloquine, MDAQ,chloroquine, piperaquine, year,country,  `crt-Lys76Thr`,`mdr1-Asn86Tyr` ) %>%
+   drop_na() 
+```
+
+# Time trend of CRT_MDR1 haplotypes
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+haplotype_CRT_MDR1_trend_time<- CRT_MDR1_haplotypes_associa %>%
+   rowwise() %>%
+  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
+         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
+         ) %>%
+  rowwise() %>%
+  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
+    mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year)) %>% 
+  group_by(year,haplotype) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  summarise(n = n()) %>%
+  # ungroup() %>%
+  mutate( prevalence = num((n/sum(n)),digits = 2) ,
+         m = (qbinom(0.5, size=sum(n), prob=prevalence))/sum(n),
+         lim_inf = (qbinom( 0.025, size=sum(n), prob=prevalence))/sum(n),
+         lim_sup = (qbinom( 0.975, size=sum(n), prob=prevalence))/sum(n)) %>%
+  unique() %>%
+  ggplot(aes(year, prevalence, group = haplotype, colour = haplotype)) +
+  geom_point(size = 2) +  geom_line() +
+  geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
+  scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) +
+  ylab("Prevalence (%)") + xlab ("Year") +
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title= element_text(size = 18),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 18),
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 18))
+
+
+print(haplotype_CRT_MDR1_trend_time)
+ggsave("figures/CRT_MDR1_haplotypes_trend_time.pdf", units="cm", width=19, height=14, dpi=300)
+
+
+
+```
+
+# Grouped prevalence of CRT_MDR1 haplotypes before and after 2019
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+haplotype_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
+   rowwise() %>%
+  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
+         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
+         ) %>%
+  rowwise() %>%
+  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
+  mutate( year = ifelse(year<=2018, "2016-18","2019-23")) %>% 
+  group_by(year,haplotype) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  summarise(n = n()) %>%
+  mutate( prevalence = num((n/sum(n)),digits = 2) ,
+         m = (qbinom(0.5, size=sum(n), prob=prevalence))/sum(n),
+         lim_inf = (qbinom( 0.025, size=sum(n), prob=prevalence))/sum(n),
+         lim_sup = (qbinom( 0.975, size=sum(n), prob=prevalence))/sum(n)) %>%
+  unique() %>%
+  mutate(haplotype = factor(haplotype,
+                           levels=c("Pfcrt-76T | Pfmdr1-86Y","Pfcrt-76T | Pfmdr1-N86","Pfcrt-K76 | Pfmdr1-86Y", "Pfcrt-K76 | Pfmdr1-N86"),
+                           labels = c("crt 76T + mdr186Y","crt 76T + mdr1 N86","crt K76 + mdr1 86Y","crt K76 + mdr1 N86"))) %>%
+ ggplot(aes(year, prevalence, colour = haplotype, fill = haplotype)) +
+  geom_bar( stat = "identity", color = "black") +
+  ylab("Prevalence (%)") + xlab("Year") + theme_classic() +
+  scale_fill_brewer(palette = "Set1") +
+  scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title= element_text(size = 15),
+        axis.text.x = element_text(angle=0, vjust=0.5, size = 15),
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 15))
+
+
+print(haplotype_CRT_MDR1_before2019_after2019)
+ggsave("figures/CRT_MDR1_haplotypes_grouped.pdf", units="cm", width=13, height=9, dpi=300)
+
+```
+## Stats of prevalence CRT_MDR1 haplotypes before and after 2019
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+stats_hap_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
+   rowwise() %>%
+  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
+         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
+         ) %>%
+  rowwise() %>%
+  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
+  mutate( year = ifelse(year<=2018, "2016-18","2019-23")) %>% 
+  group_by(year,haplotype) 
+
+
+table(stats_hap_CRT_MDR1_before2019_after2019$haplotype,stats_hap_CRT_MDR1_before2019_after2019$year)
+
+chisq.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype,
+           stats_hap_CRT_MDR1_before2019_after2019$year)$expected
+
+fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype,
+           stats_hap_CRT_MDR1_before2019_after2019$year)
+
+fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-K76 | Pfmdr1-N86",
+           stats_hap_CRT_MDR1_before2019_after2019$year)
+
+fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-K76 | Pfmdr1-86Y",
+           stats_hap_CRT_MDR1_before2019_after2019$year)
+
+fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-76T | Pfmdr1-N86",
+           stats_hap_CRT_MDR1_before2019_after2019$year)
+
+fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-76T | Pfmdr1-86Y",
+           stats_hap_CRT_MDR1_before2019_after2019$year)
+```
+
+## Stats of IC50 for six drugs of CRT_MDR1 haplotypes 
+```{r,echo=FALSE, message=FALSE, warning=FALSE}
+stats_hap_MDR_CRT<- CRT_MDR1_haplotypes_associa %>%
+   rowwise() %>%
+  mutate(`mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0, "mdr1-N86", "mdr1-86Y"),
+         `crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T")
+         ) %>%
+  rowwise() %>%
+  unite("haplotype",10:ncol(.),sep =" | ", remove = F) 
+
+kruskal.test(stats_hap_MDR_CRT$chloroquine, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$chloroquine, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+
+
+kruskal.test(stats_hap_MDR_CRT$MDAQ, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$MDAQ, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+
+kruskal.test(stats_hap_MDR_CRT$piperaquine, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$piperaquine, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+
+kruskal.test(stats_hap_MDR_CRT$Mefloquine, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$Mefloquine, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+
+kruskal.test(stats_hap_MDR_CRT$Lumefantrine, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$Lumefantrine, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+
+kruskal.test(stats_hap_MDR_CRT$DHA, stats_hap_MDR_CRT$haplotype)
+pairwise.wilcox.test(stats_hap_MDR_CRT$DHA, stats_hap_MDR_CRT$haplotype, p.adjust.method = "BH")
+```
+
+## Upset plot for CRT_MDR1_haplotypes 
+```{r, echo=FALSE, message=FALSE, warning=FALSE}
+CRT_MDR1_upset<- 
+CRT_MDR1_haplotypes_associa%>%
+  #create new variables to count both mixed and mutant as a single group
+    select(!c(year, country))%>%
+  #change wider format needed for upset plot
+  pivot_longer(!c(sample, chloroquine,DHA, Lumefantrine, Mefloquine, MDAQ, piperaquine), names_to = "mutation_name")  %>%
+  mutate(value = ifelse(value==2,1, 0)) %>%
+  pivot_wider(names_from = mutation_name, values_from = value) %>%
+  drop_na() %>%
+  #Creating a variable that counts the presence of wild-types per mutation
+  rowwise() %>%
+  mutate(WT = rowSums(across(c(8:ncol(cur_data())))),
+         #if sum is == 0, it means that the genotypes were wild type; otherwise they were at least one mutant
+ WT= ifelse(WT ==0, 1, 0))
+    
+data_upset_list_CRT_MDR1<- colnames(CRT_MDR1_upset)[8:ncol(CRT_MDR1_upset)]
+
+CRT_MDR1_upset[data_upset_list_CRT_MDR1] = CRT_MDR1_upset[data_upset_list_CRT_MDR1] ==1 
+t(head(CRT_MDR1_upset[data_upset_list_CRT_MDR1], ))
+
+upset_plot_CRT_MDR1_CQ_MDAQ_PPQ<- 
+      upset(CRT_MDR1_upset,
+      data_upset_list_CRT_MDR1,
+      name = "haplotype",  
+      base_annotations  = list("Chloroquine\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = chloroquine), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10())),
+           "MDAQ\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = MDAQ), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10())),
+          "PPQ\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = piperaquine), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10()))),
+          min_size =3, 
+      height_ratio=1,
+      width_ratio = 0.3,
+      queries = 
+        list(
+      upset_query(
+        intersect = "WT", fill = "grey", color = "black",
+        only_components = c('Chloroquine\nIC50 (nM)',"MDAQ\nIC50 (nM)","PPQ\nIC50 (nM)" )),
+      upset_query(
+        intersect = c("crt-Lys76Thr"), fill = "orange", color = "black",
+        only_components = c('Chloroquine\nIC50 (nM)',"MDAQ\nIC50 (nM)","PPQ\nIC50 (nM)")) ,
+      upset_query(
+        intersect = c("crt-Lys76Thr", "mdr1-Asn86Tyr"), fill = "red", color = "black",
+        only_components = c('Intersection size','Chloroquine\nIC50 (nM)',"MDAQ\nIC50 (nM)","PPQ\nIC50 (nM)")) ,
+      
+      upset_query(
+        intersect = c("mdr1-Asn86Tyr"), fill = "pink", color = "black",
+        only_components = c('Intersection size', 'Chloroquine\nIC50 (nM)',"MDAQ\nIC50 (nM)","PPQ\nIC50 (nM)")))) 
+      
+      
+print(upset_plot_CRT_MDR1_CQ_MDAQ_PPQ)
+ggsave("figures/upset_plot_CRT_MDR1_CQ_MDAQ_PPQ.pdf", device = cairo_pdf, units="cm", width=25.14, height=15.12, dpi=300)
+
+upset_plot_CRT_MDR1_MFQ_LMF_DHA<- 
+      upset(CRT_MDR1_upset,
+      data_upset_list_CRT_MDR1,
+      name = "haplotype",  
+      base_annotations  = list(
+         "MFQ\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = Mefloquine), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10())),
+            "LMF\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = Lumefantrine), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10())),
+            "DHA\nIC50 (nM)" =
+                           list(aes=aes(x= intersection, 
+                                        y = DHA), 
+                                         geom=list(
+           geom_boxplot(na.rm = TRUE),
+           scale_y_log10()))),
+          min_size =3, 
+      height_ratio=1,
+      width_ratio = 0.3 ,
+      queries = 
+        list(
+      upset_query(
+        intersect = "WT", fill = "grey", color = "black",
+        only_components = c(
+                            "MFQ\nIC50 (nM)",
+                            "LMF\nIC50 (nM)",
+                            "DHA\nIC50 (nM)")),
+      upset_query(
+        intersect = c("crt-Lys76Thr" ), fill = "orange", color = "black",
+        only_components = c("MFQ\nIC50 (nM)","LMF\nIC50 (nM)",
+                            "DHA\nIC50 (nM)")) ,
+      upset_query(
+        intersect = c("crt-Lys76Thr", "mdr1-Asn86Tyr"
+                      ), fill = "red", color = "black",
+        only_components = c('Intersection size',"MFQ\nIC50 (nM)",
+                            "LMF\nIC50 (nM)",
+                            "DHA\nIC50 (nM)")) ,
+      
+      upset_query(
+        intersect = c("mdr1-Asn86Tyr"), fill = "pink", color = "black",
+        only_components = c('Intersection size', "MFQ\nIC50 (nM)",
+                            "LMF\nIC50 (nM)",
+                            "DHA\nIC50 (nM)")))) 
+      
+print(upset_plot_CRT_MDR1_MFQ_LMF_DHA)
+ggsave("figures/upset_plot_CRT_MDR1_MFQ_LMF_DHA.pdf", device = cairo_pdf, units="cm", width=25.14, height=15.12, dpi=300)
+
+
+```
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/haplotypes_data.RData")
+```
+
+
+
+

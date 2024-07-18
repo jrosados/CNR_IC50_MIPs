@@ -1,0 +1,209 @@
+---
+title: "LD_mip_data"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(table1)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(jtools)
+library(SNPassoc)
+library(haplo.stats)
+library(genetics)
+#devtools::install_github("SFUStatgen/LDheatmap")
+# if (!require("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# 
+# BiocManager::install("snpStats")
+library("LDheatmap")
+library(here)
+
+
+```
+
+# Loading data with of genotypes using allele frequency > 0.75
+```{r, echo=FALSE, message=FALSE}
+glm_database_cont_hap<- readRDS(here("intermediate_data", "glm_database_cont_hap.rds"))
+
+data_all_plates_hap<- readRDS(here("intermediate_data", "data_all_plates_hap.rds"))
+```
+
+```{r, echo=FALSE, message=FALSE}
+SNP_matrix <- setupSNP(data=glm_database_cont_hap, colSNPs=2:3419, name.genotypes =c(0, 1, 2))
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+key_mutations<- c(#Reported by WHO k13
+  "F446I", "N458Y", "M476I", "Y493H", "R539T", "I543T", "P553L",
+  "R561H", "P574L", "C580Y", 
+  #candidates K13
+  "P441L", "G449A", "C469F", "C469Y", "A481V", "R515K", "P527H",
+  "N537I", "N537D", "G538V",  "V568G", "R622I", "A675V",
+  #4 aminoquinolines
+  #Pfcrt
+  "K76T", "C72S", "M74I", "N75E", 
+  "A220S","Q271E", "N326S", "I356T", "R371I",
+  #Pfmdr1 in combination with Pfcrt 
+  "N86Y", "Y184F", "S1034C", 'N1042D', "D1246Y", 
+  #Pfcrt
+  "T93S", "H97Y","F145I", "I218F", "C350R", "M343L", "G353V",
+  #Antifolates
+  #PfDHFR
+  "N51I", "C59R", "S108N", "I164L", "A16V",
+  #Pfdhps
+  "S436A", "S436F", "A437G", "K540E", "A581G", "A613T", "A613S",
+  #Pfcytb
+  "Y268N", "Y268S", "Y268C",
+  #published by Verity et al
+  "S160N", "K199T", "I723V", "G639D", "N569K", "E431K", "L402V",
+  #pfubp1
+  "N1704K", "K1705N",
+  #MDR2
+  "M1019K", "I492V", "F423Y", "K253T", "V250I", "S208N", "R176L", "T23M")
+```
+
+```{r, echo=FALSE, message=FALSE}
+probes <- read.csv("raw_data/all_haplotypes.csv")%>%
+  dplyr::select(Gene, Chrom) %>%
+  unique() %>%
+  dplyr::rename(gene = Gene,
+         chr = Chrom)
+```
+
+# Selecting key SNPs
+```{r, echo=FALSE, message=FALSE}
+key_SNP_list<- summary(SNP_matrix[10:ncol(SNP_matrix)]) %>%
+  filter(major.allele.freq < 99) %>%
+  rownames_to_column() %>%
+filter(!str_detect(rowname, "del"),
+       !str_detect(rowname, "ins"),
+       !str_detect(rowname, "fs"),
+       !str_detect(rowname, "dup"),
+       str_detect(rowname, 
+                  "dhfr|mdr1|crt|dhps|k13|ubp1"
+                  ))      %>%
+inner_join(data_all_plates_hap %>% dplyr::select(mutation_name,gene, aa_change) %>% 
+             mutate(mutation_name=   str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")), by =c("rowname" = "mutation_name")) %>%
+  unique() %>%
+  filter(aa_change%in% key_mutations) %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  group_by(gene) %>%
+  #Removing non biallelic SNPs
+  filter(!duplicated(position_aa)) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(chr = as.numeric(str_extract(chr, "[1-9][0-9]{0,3}"))) %>%
+  group_by(chr, gene) %>%
+  arrange(position_aa,.by_group = TRUE) %>% 
+    ungroup() %>%
+  dplyr::select(!c(gene,aa_change)) %>%
+  column_to_rownames() 
+```
+
+# Updating the SNP matrix
+```{r, echo=FALSE, message=FALSE}
+SNP_matrix <- 
+  SNP_matrix %>%
+  dplyr::select(c(1:9),
+                all_of(row.names(key_SNP_list)))
+               
+```
+
+Ivory Coast and Cameroon are the two mos frequent visited countries by participants in our dataset
+# Extracting genotypes from Ivory Coast
+```{r, echo=FALSE, message=FALSE}
+genotype_IC<- #IC stands for Ivory Coast
+  SNP_matrix %>%
+  filter(country== "Ivory Coast") %>%
+  dplyr::select(!c(sample, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine, 
+                   piperaquine, country, year))
+ 
+genotype_CA<- #CA stands for Cameroon
+    SNP_matrix %>%
+  filter(country== "Cameroon") %>%
+  dplyr::select(!c(sample, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine, 
+                   piperaquine, country, year))
+
+```
+
+# Transform our dataframe to genetic dataframe with makeGenotypes function
+```{r, echo=FALSE, message=FALSE}
+LDdata_IC<-makeGenotypes(genotype_IC)
+
+LDdata_CA<-makeGenotypes(genotype_CA)
+```
+
+# Extract SNP names from our genetic dataframe
+```{r, echo=FALSE, message=FALSE}
+SNP_names_IC<- colnames(LDdata_IC)
+
+SNP_names_CA<- colnames(LDdata_CA)
+
+```
+
+# LD Plot of Ivory Coast and Cameroon samples
+```{r, echo=FALSE, message=FALSE}
+#### Draw and modify two heat maps on one plot ####
+pdf("figures/LD_plot.pdf", width=8, height=7)
+grid.newpage()
+##Draw and the first heat map on the left half of the graphics device
+pushViewport(viewport(x=0, width=0.5, just="left"))
+LD_CA<-LDheatmap(LDdata_CA,genetic.distances=NULL, LDmeasure = "r", 
+                 #color="blueToRed",
+                 #color=rgb.palette(18),
+                 color=grey.colors(20),
+                 newpage=FALSE, title="LD in isolates from travelers to Cameroon",
+                 SNP.name=SNP_names_CA, 
+                 add.map = FALSE, name="Cameroon")
+upViewport()
+##Draw the second heat map on the right half of the graphics device
+pushViewport(viewport(x=1,width=0.5,just="right"))
+LD_IC<-LDheatmap(LDdata_IC, genetic.distances=NULL, LDmeasure = "r",
+                 #color=rgb.palette(18),
+                 #color="blueToRed",
+                 color=grey.colors(20),
+                 newpage=FALSE,
+                 title="LD in isolates from travelers to Côte d'Ivoire",
+                 SNP.name=SNP_names_IC, 
+                 add.map = FALSE,
+                 name="Ivory Coast")
+upViewport()
+
+dev.off()
+
+```
+
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/LD_data.RData")
+```
+
+

@@ -1,0 +1,574 @@
+---
+title: "Prevalence of validated antimalarial resistance mutations"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(miplicorn)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(jtools)
+library(skimr)
+library(ggpubr)
+library(forcats)
+library(here)
+library(tableone)
+library(writexl)
+```
+
+#Loading data from previous runs
+```{r, include=FALSE}
+IC50_genotype <- readRDS(here("intermediate_data", "IC50_genotype.rds"))
+data_all_plates <- readRDS(here("intermediate_data", "MIP_data_all_plates.rds")) 
+```
+
+## Editing genotype codes to run SNPassoc.
+We are including ALL monoclonal and polyclonal samples for this exploratory analysis. Excluding duplicated mutation names. For SNPassoc Format: Homozygous should be coded as 0 (wt), heterozygous as 1 and mutant homozygous as 2, and missing are coded as NA 
+```{r, echo=FALSE, message=FALSE}
+#We don't remove samples or mutation names, n = 830/Mutation name= 4110
+
+long_format_genotype_data<- IC50_genotype %>%
+  select(!c(palu_id, sample_date, species, parasitemia, year, sample_id2, 
+            country, gender, age, DHA, Lumefantrine, Mefloquine,MDAQ,
+            chloroquine,piperaquine, median_coi)) %>%
+  pivot_longer(!c(sample), names_to = "mutation_name", values_to = "genotype") %>% 
+  #removing duplicated sample id
+  group_by(sample, mutation_name) %>%
+  distinct(sample, mutation_name, .keep_all = T) 
+
+```
+
+## Check for duplicates: No duplicates
+```{r, echo=FALSE, message=FALSE}
+   long_format_genotype_data%>%
+   dplyr::group_by(sample,mutation_name) %>%
+   dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+   dplyr::filter(n > 1L) 
+
+```
+
+
+### We are removing mutation names with percentages of missing value >= 60%.
+```{r, echo=FALSE,message=FALSE}
+genotype_format_filtered<-
+  long_format_genotype_data %>% 
+  #We don't want duplicated sample and mutation name
+  unique() %>%
+  #Change format to be able to count for NA per mutation
+  pivot_wider(names_from = sample, values_from = genotype) %>% 
+  rowwise() %>%
+  #We count the percentage of NA per mutation names 
+  mutate(NA_percent = sum(is.na(across(everything())))/length(.),
+         NAs_s = sum(is.na(across(everything())))) %>%
+  #We remove mutation names with missing percentage >= 60%
+  filter(NA_percent <=0.30) %>%
+  #We are removing NAs_S and NA_percent as we don't need them anymore
+  dplyr::select(!c(NA_percent,NAs_s)) %>%
+  pivot_longer(cols = !mutation_name) %>%
+  pivot_wider(names_from = "mutation_name", values_from = "value") %>%
+    rename(sample = name)
+  
+#We have now 805 (before it was 813) unique samples and 3491 mutation names  
+```
+
+
+### Selecting IC50 phenotypic data
+Only those sample names from upstream selection (n = 813). 
+```{r, echo=FALSE,message=FALSE}
+phenotypic_data_cont<- IC50_genotype%>%
+  select(sample, DHA, Lumefantrine, Mefloquine,MDAQ,chloroquine,piperaquine,year,country,median_coi)
+
+```
+
+### Formatting genotype and phenotype data for prevalence analysis
+Only those sample names from upstream selection (n = 805)
+```{r, echo=FALSE,message=FALSE}
+glm_database_cont<- genotype_format_filtered %>%
+  mutate(sample =  as.numeric(sample)) %>%
+  inner_join(phenotypic_data_cont, by = "sample") 
+
+write_rds(glm_database_cont,"intermediate_data/glm_database_cont.rds", "xz")
+
+```
+
+# Validated mutations
+We are going to focus on "Key" mutations,i.e. validated mutations reported by the WHO in its last report(Report on antimalarial drug efficacy, resistance and response: 10 years of surveillance (2010-2019)) <https://www.who.int/publications/i/item/9789240012813>
+```{r, echo=FALSE}
+#We write the list of key mutations
+key_mutations<- c(#Reported by WHO k13
+                  "F446I", "N458Y", "M476I", "Y493H", "R539T", "I543T", "P553L",
+                  "R561H", "P574L", "C580Y", 
+                  #candidates K13
+                  "P441L", "G449A", "C469F", "C469Y", "A481V", "R515K", "P527H",
+                  "N537I", "N537D", "G538V",  "V568G", "R622I", "A675V",
+                  #4 aminoquinolines
+                  #Pfcrt
+                  "K76T", "C72S", "M74I", "N75E", 
+                  "A220S","Q271E", "N326S", "I356T", "R371I",
+                  #Pfmdr1 in combination with Pfcrt 
+                  "N86Y", "Y184F", "S1034C", 'N1042D', "D1246Y", 
+                  #Pfcrt
+                  "T93S", "H97Y","F145I", "I218F", "C350R", "M343L", "G353V",
+                  #Antifolates
+                  #PfDHFR
+                  "N51I", "C59R", "S108N", "I164L", "A16V",
+                  #Pfdhps
+                  "S436A", "S436F", "A437G", "K540E", "A581G", "A613T", "A613S",
+                  #Pfcytb
+                  "Y268N", "Y268S", "Y268C",
+                  
+                  #published by Verity et al
+                  "S160N", "K199T", "I723V", "G639D", "N569K", "E431K", "L402V")
+
+key_mutations_all_plates<- data_all_plates %>%
+  filter(aa_change %in% key_mutations, 
+gene =="dhps" | gene =="dhfr-ts"| gene=="crt"|gene=="mdr1" )
+                     
+
+```
+
+## Prevalence of key mutations
+```{r, echo=FALSE}
+prevalence_key_mutations <- mutation_prevalence(key_mutations_all_plates, threshold = 0) 
+
+Key_mutations_plot<- prevalence_key_mutations %>%
+  mutate(mutation_name2 = mutation_name,
+         prevalence = num((prevalence*100),digits = 1),
+         mutation_name = str_replace(mutation_name,"ts-","")) %>%
+ separate_wider_delim(mutation_name2, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(mutation = str_replace(mutation,"ts-","")) %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}"))) %>%
+  group_by(gene) %>%
+  arrange(aa_coden_position,.by_group = TRUE) %>% 
+  ungroup() %>%
+  mutate(n_order = row_number()) %>%
+  ggplot(aes(reorder(mutation_name, n_order), prevalence, fill =  gene)) + 
+  geom_bar(stat = "identity") + 
+  theme_classic2(base_size = 16) + 
+  ylim(0,100)+
+  ylab("Prevalence (%)") + xlab("Amino acid change") +  ggtitle("") +
+  scale_fill_brewer(name = "Gene", palette = "Dark2") +
+  theme(plot.title = element_text(hjust = 0.5),
+       axis.text.x = element_text(angle=90, vjust=0.5, size = 12), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 12), 
+        legend.position ="bottom") 
+           
+print(Key_mutations_plot)
+ggsave("figures/mut_key_prevalence.pdf", units="cm", width=19, height=14, dpi=300)
+
+```
+
+```{r}
+key_mutations_prev<-Key_mutations_plot$data %>%
+  mutate(prevalence = as.numeric(prevalence)) 
+
+write.csv(key_mutations_prev, "tables/Key_mutations_prev.csv", row.names = FALSE)
+
+```
+
+
+# K13 mutations
+```{r, message=FALSE, echo=FALSE}
+#We use the glm_database_cont database to be able to include all mutations in K13 gene, not just the validated ones
+k13 <- glm_database_cont%>%
+     select(sample,starts_with("k13"))%>%
+  pivot_longer(!c(sample), names_to = "mutation", values_to = "genotype") %>%
+  filter(!str_detect(mutation, "del"),
+         !str_detect(mutation, "ins"),
+         !str_detect(mutation, "fs"),
+         !str_detect(mutation, "dup")) %>%
+  filter(!is.na(genotype)) %>% #we are including both monoclonal (homozygous , i.e. 2) and polyclonal (heterozygous, i.e. 1) and wild type monoclonal (homozygous, i.e. o)
+  mutate(genotype = ifelse(genotype>=1,1,0),
+         mutation = str_replace_all(mutation,"k13-","")) %>%
+  group_by(mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+  select(!c(sample,genotype)) %>%
+  unique() %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}")),
+         Within_propeller_domain = ifelse(aa_coden_position<350,"N-ter","Propeller")) %>%
+  arrange(aa_coden_position) %>% 
+  ggplot(aes(reorder(mutation, aa_coden_position), prevalence, fill = Within_propeller_domain)) + 
+  geom_bar(stat = "identity") + 
+  theme_classic2(base_size = 12.3) + 
+  ylab("Prevalence (%)") + xlab("") + 
+  scale_fill_brewer(name = "WHO category", palette = "Dark2") +
+  theme(plot.title = element_text(hjust = 0.5),
+       axis.text.x = element_text(angle=90, vjust=0.5, size = 9), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 9), 
+        legend.position ="none") 
+  
+print(k13)
+ # Validated #F446I N458Y M476I Y493H R539T I543T P553L R561H P574L C580Y
+
+ # Candidate "P441L", "G449A", "C469F", "C469Y", "A481V", "R515K", "P527H",
+ #                  "N537I", "N537D", "G538V",  "V568G", "R622I", "A675V",
+ggsave("figures/k13_mutations.pdf", units="cm", width=15, height=9, dpi=300)
+```
+```{r}
+K13_prevalence<- k13$data %>%
+  mutate(prevalence = as.numeric(prevalence)) %>%
+  filter(Within_propeller_domain=="Propeller")
+
+write.csv(K13_prevalence, "tables/K13_prevalence.csv", row.names = FALSE)
+
+```
+
+*Background mutations*
+Pf apicoplast ribosomal protein s10 (Pfarps10-V127M) not covered
+Pf ferredoxin (Pffd-D193Y) ok
+Pf multidrug resistance 2 transporter (Pfmdr2-T484I) ok
+putative phosphoinositide-binding protein (Pfpib7-C1484F) ok
+Pf protein phosphatase (Pfpp-V1157L) ok
+Pf chloroquine resistance transporter (Pfcrt-N326S) and Pfcrt-I356T), OK
+
+
+```{r, echo=FALSE, message=FALSE}
+background_mutations<-
+glm_database_cont%>%
+  select(sample,
+         `fd-Asp193Tyr`,
+         `mdr2-Thr484Ile`,
+         `pib7-Cys1484Phe`,
+         `crt-Asn326Ser`,
+         `crt-Ile356Thr`,
+         `pph-Val1157Leu`) %>%
+  pivot_longer(!c(sample), names_to = "mutation", values_to = "genotype") %>%
+select(mutation,genotype)%>%
+   filter(!is.na(genotype)) %>% 
+  #we are including both monoclonal (homozygous , i.e. 2) and polyclonal (heterozygous, i.e. 1) and wild type monoclonal (homozygous, i.e. o)
+  mutate(genotype = ifelse(genotype>=1,1,0))%>%
+  group_by(mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation), 
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+  select(!c(genotype)) %>%
+  unique() 
+
+#In order to preserve numeric columns as classes when exported, the easiest way is to export it to excel file
+write_xlsx(background_mutations, "tables/background_mutations.xlsx")
+
+
+```
+
+*Other mutations* 
+Pfap2mu S160N ok
+
+Pfatp6:
+L263E, not covered 
+E431K, ok
+A623E, ok
+S769N, ok
+
+Pfubp1:
+D1525E, ok
+E1528D, ok
+
+```{r, echo=FALSE, message=FALSE}
+other_mutations<-
+glm_database_cont %>%
+  select(sample,
+         `Pfap2mu-Ser160Asn`,
+         `atp6-Glu431Lys`,
+         `atp6-Ala623Glu`,
+         `atp6-Ser769Asn`,
+         `Pfubp1-Asp1525Glu`,
+         `Pfubp1-Glu1528Asp`) %>%
+pivot_longer(!c(sample), names_to = "mutation", values_to = "genotype") %>%
+select(mutation,genotype)%>%
+  filter(!is.na(genotype)) %>%
+  mutate(genotype = ifelse(genotype>=1,1,0)) %>%
+  group_by(mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation), 
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+  select(!c(genotype)) %>%
+  unique() 
+
+ 
+#In order to preserve numeric columns as classes when exported, the easiest way is to export it to excel file
+write_xlsx(other_mutations, "tables/other_mutations.xlsx")
+
+```
+
+## Prevalence table per year 
+```{r}
+IC50_genotype_subset<-
+                    IC50_genotype %>%
+                    #We select key genes
+               select(starts_with("dhps"),
+                      starts_with("dhfr"),
+                      starts_with("crt"),
+                      starts_with("mdr1"),
+                      starts_with("k13"),
+                      year,
+                      country, sample) %>%
+  pivot_longer(!c(sample,country, year), names_to = "mutation", values_to = "genotype") %>%
+  filter(!genotype== "-1") %>% #we are including both monoclonal (homozygous , i.e. 2) and polyclonal (heterozygous, i.e. 1) and wild type monoclonal (homozygous, i.e. o)
+  mutate(genotype = ifelse(genotype>=1,1,0)) %>%
+           separate_wider_delim(mutation, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(mutation = str_replace(mutation,"ts-",""),
+         gene = str_replace(gene,"dhfr","dhfr-ts"))
+```
+
+```{r}
+
+IC50_genotype_subset %>%
+  filter(mutation %in% key_mutations_prev$mutation | 
+           mutation %in% K13_prevalence$mutation) %>%
+  select(year,gene,mutation,genotype) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year)) %>% 
+  group_by(gene,mutation,year) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+  select(!c(genotype, n_total, n_mutant)) %>%
+  unique() %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}"))) %>%
+  group_by(gene) %>%
+  arrange(aa_coden_position,.by_group = TRUE) %>% 
+  ungroup() %>%
+  mutate(n_order = row_number()) %>%
+  select(!c(aa_coden_position, n_order)) %>%
+  pivot_wider(names_from = year, values_from = prevalence) %>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
+
+
+
+
+```{r, echo=FALSE, message=FALSE}
+
+top_countries <- IC50_genotype %>%
+  mutate(country= case_when(country== "Congo_RDC_Zaire"~ "Democratic Republic of the Congo",
+                                  country == "Congo"~ "Republic of the Congo",
+                              country == "Guinee Equatoriale"  ~ "Equatorial Guinea",
+                             country == "Comores" ~ "Comoros",
+                             country == "Central Africa" ~ "Central African Republic", 
+                                  TRUE ~ country)) %>%
+  rename(admin = country) %>%
+  group_by(admin) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(Frequency = n/sum(n)) %>%
+  arrange(desc(Frequency)) %>%
+  filter(Frequency>=0.026) %>%
+  mutate(admin2 = admin) %>%
+  mutate(admin2 = case_when(admin2=="Benin" |admin2=="Gabon" |admin2=="Togo"|admin2=="Burkina Faso" |admin2=="Nigeria"|admin2=="Democratic Republic of the Congo" | admin2=="Niger" ~ "agreggate", TRUE ~ admin2))
+
+```
+
+# "Raw data" i.e. categorized into wild-type, mixed genotype and pure mutant
+```{r, echo=FALSE, message=FALSE}
+
+IC50_genotype_subset_raw<- IC50_genotype %>%
+  #We select key genes
+               select(starts_with("dhps"),
+                      starts_with("dhfr"),
+                      starts_with("crt"),
+                      starts_with("mdr1"),
+                      starts_with("k13"),
+                      year,
+                      country, sample) %>%
+  pivot_longer(!c(sample,country, year), names_to = "mutation", values_to = "genotype") %>%
+  filter(!genotype== "-1") %>% #we are including both monoclonal (homozygous , i.e. 2) and polyclonal (heterozygous, i.e. 1) and wild type monoclonal (homozygous, i.e. o)
+           separate_wider_delim(mutation, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(mutation = str_replace(mutation,"ts-",""),
+         gene = str_replace(gene,"dhfr","dhfr-ts"))
+
+
+key_genotype_subset_raw<-
+IC50_genotype_subset_raw %>%
+  filter(mutation %in% key_mutations_prev$mutation | 
+           mutation %in% K13_prevalence$mutation) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year)) %>% 
+  mutate(genotype = case_when(genotype==1 ~ "mixed",
+                              genotype==0 ~ "wild-type",
+                              genotype==2 ~ "mutant")) %>%
+  group_by(gene,mutation,year) %>%
+   mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}"))) %>%
+  group_by(gene) %>%
+  arrange(aa_coden_position,.by_group = TRUE) %>% 
+  ungroup() %>%
+  mutate(n_order = row_number()) %>%
+  select(!c(aa_coden_position, n_order)) %>%
+  mutate(gene_mut = paste(gene,mutation, sep = "-"),
+         genotype = as.character(genotype)) %>%
+   pivot_wider(id_cols= c(year, country, sample), names_from = gene_mut, values_from = genotype) 
+
+```
+
+# "Raw data" table per year, i.e. categorized into wild-type, mixed genotype and pure mutant
+```{r, echo=FALSE, message=FALSE}
+key_genotype_subset_raw_no_country<-
+key_genotype_subset_raw %>%
+  select(!c(country, sample))
+
+key_genotype_subset_raw_table<- table1(~.| year
+     , data = key_genotype_subset_raw_no_country, 
+     render.missing = NULL,
+     render.categorical="FREQ (PCTnoNA%)"
+     )  
+knitr::kable(key_genotype_subset_raw_table)
+
+```
+
+```{r,echo=FALSE, message=FALSE}
+write.csv(key_genotype_subset_raw_table, "tables/key_genotype_subset_raw_table.csv", col.names = F)
+```
+
+# "Raw data" table per top country, i.e. categorized into wild-type, mixed genotype and pure mutant
+```{r, echo=FALSE}
+key_genotype_subset_raw_country<-
+key_genotype_subset_raw %>%
+  select(!c(year, sample)) %>%
+ filter(country %in% top_countries$admin)
+
+key_genotype_subset_raw_country_table<- table1(~.| country
+     , data = key_genotype_subset_raw_country,  
+     render.missing = NULL,
+     render.categorical="FREQ (PCTnoNA%)" ) 
+ 
+knitr::kable(key_genotype_subset_raw_country_table)
+```
+
+```{r,echo=FALSE, message=FALSE}
+write.csv(key_genotype_subset_raw_country_table, "tables/key_genotype_subset_raw_country_table.csv", col.names = F)
+```
+
+# Temporal change of key resistance mutations by year
+```{r, echo=FALSE, message=FALSE}
+mutations_trend_time<- IC50_genotype_subset %>%
+      filter(mutation == "Lys76Thr" |mutation == "Ala437Gly" | mutation == "Cys59Arg" |
+                             mutation == "Asn86Tyr") %>%
+  mutate(mutation = case_when(mutation =="Lys76Thr" ~ "Pfcrt (K76T)",
+                              mutation =="Ala437Gly" ~ "Pfdhps (A437G)",
+                              mutation =="Cys59Arg" ~ "Pfdhfr-ts (C59R)",
+                              mutation == "Asn86Tyr" ~ "Pfmdr1 (N86Y)")) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year)) %>% 
+  group_by(mutation, year) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant/n_total),digits = 2),
+         m = (qbinom(0.5, size=n_total, prob=prevalence))/n_total,
+         lim_inf = (qbinom( 0.025, size=n_total, prob=prevalence))/n_total,
+         lim_sup = (qbinom( 0.975, size=n_total, prob=prevalence))/n_total) %>%
+  select(!c(genotype, n_total, n_mutant, sample, country)) %>%
+  unique() %>%
+  ggplot(aes(year, prevalence, group = mutation, colour = mutation)) + 
+  geom_point(size = 2) +  geom_line() + 
+  geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
+  scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) + 
+  ylab("Prevalence (%)") + xlab ("Year") + 
+  theme_classic() +
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.title= element_text(size = 18),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 18),
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 18))
+
+
+print(mutations_trend_time)
+ggsave("figures/mutations_trend_time.pdf", units="cm", width=19, height=14, dpi=300)
+
+```
+# Prevalence of key resistance mutations by year and by country
+```{r}
+mutations_trend_time_top_ten_countries<- IC50_genotype_subset %>%
+      filter(mutation == "Lys76Thr" | 
+              mutation == "Ala437Gly" | mutation == "Cys59Arg" |
+              mutation == "Asn86Tyr",
+             country %in% top_countries$admin) %>%
+    mutate(mutation = case_when(mutation =="Lys76Thr" ~ "Pfcrt (K76T)",
+                              mutation =="Ala437Gly" ~ "Pfdhps (A437G)",
+                              mutation =="Cys59Arg" ~ "Pfdhfr-ts (C59R)",
+                              mutation == "Asn86Tyr" ~ "Pfmdr1 (N86Y)")) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year)) %>%
+ mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad", "Gabon", "Benin"),
+                           labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad", "Gabon", "Benin"))) %>% 
+  group_by(mutation, year, country) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_mutant = sum(genotype==1),
+    prevalence = num((n_mutant/n_total),digits = 2),
+         m = (qbinom(0.5, size=n_total, prob=prevalence))/n_total,
+         lim_inf = (qbinom( 0.025, size=n_total, prob=prevalence))/n_total,
+         lim_sup = (qbinom( 0.975, size=n_total, prob=prevalence))/n_total) %>%
+  select(!c(genotype, n_total, n_mutant, sample)) %>%
+  unique() %>%
+  ggplot(aes(year, prevalence, group = mutation, colour = mutation)) + 
+  geom_point(size = 2) +  geom_line() + 
+  geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
+  scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) + 
+  ylab("Prevalence (%)") + xlab ("Year") + 
+  theme_classic() +
+  theme(axis.text.x = element_text(angle = 90))+
+  facet_wrap(~country) 
+             
+print(mutations_trend_time_top_ten_countries)
+ggsave("figures/mutations_trend_time_top_ten_countries.pdf", units="cm", width=23, height=14.5, dpi=300)
+
+```
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/validated_mutations.RData")
+```
+

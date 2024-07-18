@@ -1,0 +1,353 @@
+---
+title: "Proportion_genotypes_supp"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(tidyverse)
+library(ggplot2)
+library(cowplot)
+library(SNPassoc)
+library(forcats)
+library(ggh4x) 
+library(ggpubr)
+library(here)
+
+
+```
+
+#Loading data from previous runs
+```{r, include=FALSE}
+IC50_genotype <- readRDS(here("intermediate_data", "IC50_genotype.rds"))
+glm_database_cont <- readRDS(here("intermediate_data", "glm_database_cont.rds")) 
+all_haplotypes <-read.csv("raw_data/all_haplotypes.csv")
+data_all_plates <- readRDS(here("intermediate_data", "MIP_data_all_plates.rds")) 
+```
+
+#Selecting and sorting key mutations
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+SNP_matrix <- setupSNP(data=glm_database_cont, colSNPs=2:3419, name.genotypes =c(0, 1, 2))
+
+key_mutations<- c(#Reported by WHO k13
+  "F446I", "N458Y", "M476I", "Y493H", "R539T", "I543T", "P553L",
+  "R561H", "P574L", "C580Y", 
+  #candidates K13
+  "P441L", "G449A", "C469F", "C469Y", "A481V", "R515K", "P527H",
+  "N537I", "N537D", "G538V",  "V568G", "R622I", "A675V",
+  #4 aminoquinolines
+  #Pfcrt
+  "K76T", "C72S", "M74I", "N75E", 
+  "A220S","Q271E", "N326S", "I356T", "R371I",
+  #Pfmdr1 in combination with Pfcrt 
+  "N86Y", "Y184F", "S1034C", 'N1042D', "D1246Y", 
+  #Pfcrt
+  "T93S", "H97Y","F145I", "I218F", "C350R", "M343L", "G353V",
+  #Antifolates
+  #PfDHFR
+  "N51I", "C59R", "S108N", "I164L", "A16V",
+  #Pfdhps
+  "S436A", "S436F", "A437G", "K540E", "A581G", "A613T", "A613S",
+  #Pfcytb
+  "Y268N", "Y268S", "Y268C",
+  #published by Verity et al
+  "S160N", "K199T", "I723V", "G639D", "N569K", "E431K", "L402V",
+  #pfubp1
+ "N1704K", "K1705N",
+  #MDR2
+  "M1019K", "I492V", "F423Y", "K253T", "V250I", "S208N", "R176L", "T23M")
+
+probes <- all_haplotypes %>%
+  dplyr::select(Gene, Chrom) %>%
+  unique() %>%
+  rename(gene = Gene,
+         chr = Chrom)
+
+#Selecting key SNPs
+
+key_SNP_list<- summary(SNP_matrix[10:ncol(SNP_matrix)]) %>%
+  filter(major.allele.freq < 99) %>%
+  rownames_to_column() %>%
+  filter(!str_detect(rowname, "del"),
+         !str_detect(rowname, "ins"),
+         !str_detect(rowname, "fs"),
+         !str_detect(rowname, "dup"),
+         str_detect(rowname, 
+                    "dhfr|mdr1|crt|dhps|k13"
+         ))      %>%
+  inner_join(data_all_plates %>% dplyr::select(mutation_name,gene, aa_change) %>% 
+               mutate(mutation_name=   str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")), by =c("rowname" = "mutation_name")) %>%
+  unique() %>%
+  filter(aa_change%in% key_mutations) %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  group_by(gene) %>%
+  #Removing non biallelic SNPs
+  filter(!duplicated(position_aa)) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(chr = as.numeric(str_extract(chr, "[1-9][0-9]{0,3}"))) %>%
+  group_by(chr, gene) %>%
+  arrange(position_aa,.by_group = TRUE) %>% 
+  ungroup() %>%
+  dplyr::select(!c(gene,aa_change)) %>%
+  column_to_rownames() 
+
+```
+
+# Proportion of mixed infections in key mutations
+```{r, echo=FALSE, message=FALSE}
+SNP_list <- key_SNP_list %>%
+  mutate(mutation_name = rownames(key_SNP_list))
+
+proportion_mixed_infections <- IC50_genotype %>%
+  dplyr::select(!c(palu_id, sample_date, species, parasitemia, 
+                   year, sample_id2,gender, age,
+                   DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine, piperaquine)) %>%
+  pivot_longer(!c(sample,country), names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name= str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% SNP_list$mutation_name,
+         !is.na(genotype)) %>% 
+  inner_join(SNP_list %>% dplyr::select(mutation_name,position_aa, chr), by = "mutation_name") %>%
+  distinct(sample, country,mutation_name,genotype, .keep_all = T) %>%
+  dplyr::select(!sample) %>%
+  group_by(country, mutation_name) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation_name),
+         n_wt = sum(genotype==0),
+         n_mixed= sum(genotype==1),
+         n_mutant = sum(genotype==2),
+         wild_type = num((n_wt) *100/n_total,digits = 1),
+         mutant = num((n_mutant) *100/n_total,digits = 1),
+         mixed = num((n_mixed)*100/n_total,digits = 1)
+  ) %>%
+  dplyr::select(!c(genotype, n_total, n_mixed, n_mutant, n_wt)) %>%
+  unique()  %>%
+  pivot_longer(cols = !c(country,mutation_name, chr, position_aa)) %>%
+  mutate(mutation_name2 = mutation_name,
+    order_mut = str_extract(position_aa, "[1-9][0-9]{0,3}")) %>%
+  dplyr::rename(genotype = name) %>%
+  separate_wider_delim(mutation_name2, ".", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(mutation = str_replace(mutation,"ts-",""),
+         gene = str_replace(gene,"dhfr","dhfr-ts"),
+         genotype = factor(genotype,
+                                  levels=c("mutant","mixed","wild_type"),
+                                  labels = c("mutant","mixed","wild type"))) %>%
+  group_by(gene) %>%
+  arrange(position_aa,.by_group = TRUE) %>% 
+  ungroup() %>%
+  mutate(n_order = row_number()) %>%
+  filter(country=="Ivory Coast" | country== "Cameroon" | country== "Mali" |
+           country== "Guinea" | country== "Republic of the Congo" | 
+           country=="Senegal" | country=="Central African Republic" | 
+           country=="Chad" | country=="Benin" |country=="Gabon") %>%
+  mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea",
+                                    "Republic of the Congo", "Senegal", 
+                                    "Central African Republic", "Chad","Benin", "Gabon" ),
+                           labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea",
+                                      "Republic of the Congo", "Senegal", 
+                                      "Central African Republic", "Chad","Benin", "Gabon"))) %>%
+  ggplot() +
+  geom_bar( aes(reorder(mutation_name, n_order),     
+                value, fill = genotype), stat = "identity") + 
+  ylab("Prevalence %") + xlab("mutations") + theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 7), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 7)) +
+  facet_wrap(~country)
+
+
+print(proportion_mixed_infections)
+ggsave("figures/key_mutations_ten_countries.pdf", units="cm", width=19, height=14, dpi=300)
+
+
+```
+
+# Proportion of mixed infections in k13 gene
+```{r, echo=FALSE, message=FALSE}
+
+k13_mixed_genotypes_1_4countries <- glm_database_cont%>%
+  select(sample,country, starts_with("k13"))%>%
+  pivot_longer(!c(sample, country), names_to = "mutation", values_to = "genotype") %>%
+  filter(!str_detect(mutation, "del"),
+         !str_detect(mutation, "ins"),
+         !str_detect(mutation, "fs"),
+         !str_detect(mutation, "dup")) %>%
+  filter(!is.na(genotype)) %>% 
+  mutate(mutation = str_replace_all(mutation,"k13-","")) %>%
+  select(!c(sample)) %>%
+  group_by(country, mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_wt = sum(genotype==0),
+         n_mixed= sum(genotype==1),
+         n_mutant = sum(genotype==2),
+         wild_type = num((n_wt) *100/n_total,digits = 1),
+         mutant = num((n_mutant) *100/n_total,digits = 1),
+         mixed = num((n_mixed)*100/n_total,digits = 1)) %>%
+  dplyr::select(!c(genotype, n_total, n_mixed, n_mutant, n_wt)) %>%
+  unique()  %>%
+  pivot_longer(cols = !c(country,mutation)) %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}")),
+         Within_propeller_domain = ifelse(aa_coden_position<350,"N-ter","Prop")) %>%
+  arrange(aa_coden_position) %>% 
+  dplyr::rename(genotype = name) %>%
+  mutate( genotype = factor(genotype,
+                           levels=c("mutant","mixed","wild_type"),
+                           labels = c("mutant","mixed","wild type"))) %>%
+  ungroup() %>%
+  filter(country=="Ivory Coast" | country== "Cameroon" | country== "Mali" |
+           country== "Guinea" ) %>%
+  mutate(country = factor(country, 
+                           levels=c("Ivory Coast","Cameroon","Mali", "Guinea"
+                                     ),
+                           labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea"))) %>%
+  ggplot() +
+  geom_bar( aes(reorder(mutation, aa_coden_position),     
+        value, fill = genotype), stat = "identity") + 
+  ylab("Prevalence %") + xlab("") + theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 4), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 6)) +
+facet_nested(~country+ Within_propeller_domain , 
+             scales = "free_x" , space = "free",
+             drop = TRUE ) 
+
+print(k13_mixed_genotypes_1_4countries)
+
+k13_mixed_genotypes_5_8countries <- glm_database_cont%>%
+  select(sample,country, starts_with("k13"))%>%
+  pivot_longer(!c(sample, country), names_to = "mutation", values_to = "genotype") %>%
+  filter(!str_detect(mutation, "del"),
+         !str_detect(mutation, "ins"),
+         !str_detect(mutation, "fs"),
+         !str_detect(mutation, "dup")) %>%
+  filter(!is.na(genotype)) %>% 
+  mutate(mutation = str_replace_all(mutation,"k13-","")) %>%
+  select(!c(sample)) %>%
+  group_by(country, mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_wt = sum(genotype==0),
+         n_mixed= sum(genotype==1),
+         n_mutant = sum(genotype==2),
+         wild_type = num((n_wt) *100/n_total,digits = 1),
+         mutant = num((n_mutant) *100/n_total,digits = 1),
+         mixed = num((n_mixed)*100/n_total,digits = 1)) %>%
+  dplyr::select(!c(genotype, n_total, n_mixed, n_mutant, n_wt)) %>%
+  unique()  %>%
+  pivot_longer(cols = !c(country,mutation)) %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}")),
+         Within_propeller_domain = ifelse(aa_coden_position<350,"N-ter","Prop")) %>%
+  arrange(aa_coden_position) %>% 
+  dplyr::rename(genotype = name) %>%
+  mutate( genotype = factor(genotype,
+                            levels=c("mutant","mixed","wild_type"),
+                            labels = c("mutant","mixed","wild type"))) %>%
+  ungroup() %>%
+  filter( country== "Republic of the Congo" | country=="Senegal" | country=="Central African Republic" | 
+           country=="Chad" ) %>%
+  mutate(country = factor(country, 
+                           levels=c( "Republic of the Congo", "Senegal", 
+                                    "Central African Republic", "Chad" ),
+                           labels = c( "Republic of the Congo","Senegal", 
+                                      "Central African Republic", "Chad"))) %>%
+  ggplot() +
+  geom_bar( aes(reorder(mutation, aa_coden_position),     
+        value, fill = genotype), stat = "identity") + 
+  ylab("Prevalence %") + xlab("") + theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 4), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 6)) +
+  facet_nested(~country+ Within_propeller_domain , 
+               scales = "free_x" , space = "free",
+               drop = TRUE ) 
+
+print(k13_mixed_genotypes_5_8countries)
+
+k13_mixed_genotypes_9_10countries <- glm_database_cont%>%
+  select(sample,country, starts_with("k13"))%>%
+  pivot_longer(!c(sample, country), names_to = "mutation", values_to = "genotype") %>%
+  filter(!str_detect(mutation, "del"),
+         !str_detect(mutation, "ins"),
+         !str_detect(mutation, "fs"),
+         !str_detect(mutation, "dup")) %>%
+  filter(!is.na(genotype)) %>% 
+  mutate(mutation = str_replace_all(mutation,"k13-","")) %>%
+  select(!c(sample)) %>%
+  group_by(country, mutation) %>%
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  mutate(n_total = length(mutation),
+         n_wt = sum(genotype==0),
+         n_mixed= sum(genotype==1),
+         n_mutant = sum(genotype==2),
+         wild_type = num((n_wt) *100/n_total,digits = 1),
+         mutant = num((n_mutant) *100/n_total,digits = 1),
+         mixed = num((n_mixed)*100/n_total,digits = 1)) %>%
+  dplyr::select(!c(genotype, n_total, n_mixed, n_mutant, n_wt)) %>%
+  unique()  %>%
+  pivot_longer(cols = !c(country,mutation)) %>%
+  mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}")),
+         Within_propeller_domain = ifelse(aa_coden_position<350,"N-ter","Prop")) %>%
+  arrange(aa_coden_position) %>% 
+  dplyr::rename(genotype = name) %>%
+  mutate( genotype = factor(genotype,
+                            levels=c("mutant","mixed","wild_type"),
+                            labels = c("mutant","mixed","wild type"))) %>%
+  ungroup() %>%
+  filter( country=="Benin" |country=="Gabon") %>%
+  mutate(country = factor(country, 
+                           levels=c( "Benin", "Gabon" ),
+                           labels = c( "Benin", "Gabon"))) %>%
+  ggplot() +
+  geom_bar( aes(reorder(mutation, aa_coden_position),     
+                value, fill = genotype), stat = "identity") + 
+  ylab("Prevalence %") + xlab("mutations") + theme_classic() + 
+  theme(plot.title = element_text(hjust = 0.5),
+        axis.text.x = element_text(angle=90, vjust=0.5, size = 4), 
+        axis.text.y = element_text(angle=0, vjust=0.5, size = 6)) +
+  facet_nested(~country+ Within_propeller_domain , 
+               scales = "free_x" , space = "free",
+               drop = TRUE ) 
+
+print(k13_mixed_genotypes_9_10countries)
+
+
+k13_mixed_genotypes<-ggarrange(k13_mixed_genotypes_1_4countries, k13_mixed_genotypes_5_8countries,
+                               k13_mixed_genotypes_9_10countries,
+                                    ncol=1, nrow=3, common.legend = T, legend="right")
+                               
+
+print(k13_mixed_genotypes)
+
+
+ggsave("figures/k13_genotypes_top_ten_countries.pdf", units="cm", width=19,height=14,dpi=300)
+```
+
+
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/genotypes_mutations_supp.RData")
+```
