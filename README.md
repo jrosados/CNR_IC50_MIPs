@@ -1,6 +1,8 @@
 # CNR_IC50_MIPs
 This repository contains R scripts and raw data used for the article:  "Assessment of ex-vivo antimalarial drug efficacy in African Plasmodium falciparum parasite isolates, 2016-2023: a genotype-phenotype association study"
-Data is contained in the folder "raw_data"
+The IC50 Data is contained in the folder "raw_data": "CNR_epi.csv", "Countries_rank.csv" and "CNR_IC50_epidata.csv" contain IC50 data and epidemiological data from isolates.
+The genotype data is contained in the folder "raw_data": "alternate_AA_table.csv", "coverage_AA_table.csv", "reference_AA_table.csv", "barcode_counts.csv" and "all_haplotypes.csv" files were extracted using MIPtools.
+COI_calls.csv file was generated using R package RealMcCoil(v.1.3.1).
 
 R markdown files (.Rmd) contain scripts to perform the following analysis:
 
