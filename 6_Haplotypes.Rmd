@@ -97,7 +97,7 @@ genotype_modified_AF <-
 
 
 ```
-We started with 4109 'mutation names'. If we exclude mutations with <1% frequency we would end up with 1201 mutations. We are not exluding anything just for the purpose of estimating prevalence.
+We started with 4109 'mutation names'. If we exclude mutations with <1% frequency we would end up with 1201 mutations. We are not exluding anything just for the purpose of estimating frequency.
 
 ## Load CNR database
 ```{r, echo=FALSE, message=FALSE}
@@ -155,9 +155,9 @@ genotype_format_filtered_AF<-
 ```
 
 ## Merge MIP data and CNR database
-At this point we have 4109'mutation name'. This is the reference database for prevalence and other analysis
+At this point we have 4109'mutation name'. This is the reference database for frequency and other analysis
 ```{r, echo=FALSE, message=FALSE}
-#This is the reference database for prevalence and other analysis
+#This is the reference database for frequency and other analysis
 IC50_genotype_hap<- CNR_IC50_epidata %>%
   inner_join(genotype_format_filtered_AF, by = "sample") 
 ```
@@ -308,6 +308,12 @@ print(CRT_haplotypes_dist_plot)
 ggsave("figures/CRT_haplotypes_dist_plot.pdf", device = cairo_pdf, units="cm", width=25.14, height=15.12, dpi=300)
 ```
 
+## Drugs cut_off
+```{r}
+drugs_treshold = data.frame(drugs = c("Chloroquine",                             "Dihydroartemisinin",                           "Lumefantrine", "Mefloquine",                            "Monodesethylamodiaquine", "Piperaquine"),
+                             cut_off = c(100,10,150,30,80,135))
+```
+
 ## Effect of pfcrt haplotypes in IC50 for six drugs
 ```{r, echo=FALSE,message=FALSE}
 CRT_haplotypes_IC_association<- CRT_haplotypes_freq %>%
@@ -328,7 +334,7 @@ CRT_haplotypes_IC_association<- CRT_haplotypes_freq %>%
   scale_y_log10() +
    ylab("IC50(nM)") + xlab("PfCRT haplotypes") +
 ggtitle("") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-labs(subtitle = "n = 487",
+labs(subtitle = "n = 479",
     fill = "Haplotype\naa 74 75 76 220 271 326 356 371") + 
   theme(plot.title = element_text(face = "bold", size = 14),
         legend.text = element_text(size = 13, family = "Courier New"),
@@ -336,7 +342,9 @@ labs(subtitle = "n = 487",
         plot.subtitle = element_text(size = 13),
         legend.key.height = unit(.5, "cm"),
         legend.key.width = unit(.5, "cm")) +
-  facet_wrap(~drugs)
+  geom_hline(data = drugs_treshold, aes(yintercept = cut_off), linetype="dashed",
+                color = "red", linewidth=1, show.legend = FALSE) +
+  facet_wrap(~drugs) 
 
 print(CRT_haplotypes_IC_association)
 ggsave("figures/CRT_haplotypes_IC_association.pdf", device = cairo_pdf, units="cm", width=22.14, height=15.12, dpi=300)
@@ -593,15 +601,16 @@ MDR1_haplotypes_IC_association<- MDR1_haplotypes_freq %>%
               map_signif_level=TRUE ) +
   ylab("IC50(nM)") + xlab("PfMDR1 haplotypes") +
 ggtitle("") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-   labs(subtitle = "n = 621",
+   labs(subtitle = "n = 616",
     fill = "Haplotype\naa 86 184 1246") + 
   theme(plot.title = element_text(face = "bold", size = 14),
         legend.text = element_text(size = 13, family = "Courier New"),
         legend.title = element_text(size = 10, face = "bold"),
         plot.subtitle = element_text(size = 13),
         legend.key.height = unit(.5, "cm"),
-        legend.key.width = unit(.5, "cm")) +
-  facet_wrap(~drugs)
+        legend.key.width = unit(.5, "cm")) + geom_hline(data = drugs_treshold, aes(yintercept = cut_off), linetype="dashed",
+                color = "red", linewidth=1, show.legend = FALSE) +
+  facet_wrap(~drugs) 
 
 print(MDR1_haplotypes_IC_association)
 ggsave("figures/MDR1_haplotypes_IC_association.pdf", device = cairo_pdf, units="cm", width=20.14, height=15.12, dpi=300)
@@ -674,19 +683,19 @@ haplotype_CRT_MDR1_trend_time<- CRT_MDR1_haplotypes_associa %>%
                           year=="2023" ~ "2022-23", 
                           TRUE~ year)) %>% 
   group_by(year,haplotype) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   summarise(n = n()) %>%
   # ungroup() %>%
-  mutate( prevalence = num((n/sum(n)),digits = 2) ,
-         m = (qbinom(0.5, size=sum(n), prob=prevalence))/sum(n),
-         lim_inf = (qbinom( 0.025, size=sum(n), prob=prevalence))/sum(n),
-         lim_sup = (qbinom( 0.975, size=sum(n), prob=prevalence))/sum(n)) %>%
+  mutate( frequency = num((n/sum(n)),digits = 2) ,
+         m = (qbinom(0.5, size=sum(n), prob=frequency))/sum(n),
+         lim_inf = (qbinom( 0.025, size=sum(n), prob=frequency))/sum(n),
+         lim_sup = (qbinom( 0.975, size=sum(n), prob=frequency))/sum(n)) %>%
   unique() %>%
-  ggplot(aes(year, prevalence, group = haplotype, colour = haplotype)) +
+  ggplot(aes(year, frequency, group = haplotype, colour = haplotype)) +
   geom_point(size = 2) +  geom_line() +
   geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
   scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) +
-  ylab("Prevalence (%)") + xlab ("Year") +
+  ylab("Frequency (%)") + xlab ("Year") +
   theme_classic() +
   theme(plot.title = element_text(hjust = 0.5),
         axis.title= element_text(size = 18),
@@ -701,7 +710,7 @@ ggsave("figures/CRT_MDR1_haplotypes_trend_time.pdf", units="cm", width=19, heigh
 
 ```
 
-# Grouped prevalence of CRT_MDR1 haplotypes before and after 2019
+# Grouped frequency of CRT_MDR1 haplotypes before and after 2019
 ```{r,echo=FALSE, message=FALSE, warning=FALSE}
 haplotype_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
    rowwise() %>%
@@ -712,19 +721,19 @@ haplotype_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
   unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
   mutate( year = ifelse(year<=2018, "2016-18","2019-23")) %>% 
   group_by(year,haplotype) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   summarise(n = n()) %>%
-  mutate( prevalence = num((n/sum(n)),digits = 2) ,
-         m = (qbinom(0.5, size=sum(n), prob=prevalence))/sum(n),
-         lim_inf = (qbinom( 0.025, size=sum(n), prob=prevalence))/sum(n),
-         lim_sup = (qbinom( 0.975, size=sum(n), prob=prevalence))/sum(n)) %>%
+  mutate( frequency = num((n/sum(n)),digits = 2) ,
+         m = (qbinom(0.5, size=sum(n), prob=frequency))/sum(n),
+         lim_inf = (qbinom( 0.025, size=sum(n), prob=frequency))/sum(n),
+         lim_sup = (qbinom( 0.975, size=sum(n), prob=frequency))/sum(n)) %>%
   unique() %>%
   mutate(haplotype = factor(haplotype,
                            levels=c("Pfcrt-76T | Pfmdr1-86Y","Pfcrt-76T | Pfmdr1-N86","Pfcrt-K76 | Pfmdr1-86Y", "Pfcrt-K76 | Pfmdr1-N86"),
                            labels = c("crt 76T + mdr186Y","crt 76T + mdr1 N86","crt K76 + mdr1 86Y","crt K76 + mdr1 N86"))) %>%
- ggplot(aes(year, prevalence, colour = haplotype, fill = haplotype)) +
+ ggplot(aes(year, frequency, colour = haplotype, fill = haplotype)) +
   geom_bar( stat = "identity", color = "black") +
-  ylab("Prevalence (%)") + xlab("Year") + theme_classic() +
+  ylab("Frequency (%)") + xlab("Year") + theme_classic() +
   scale_fill_brewer(palette = "Set1") +
   scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) +
   theme(plot.title = element_text(hjust = 0.5),
@@ -737,7 +746,7 @@ print(haplotype_CRT_MDR1_before2019_after2019)
 ggsave("figures/CRT_MDR1_haplotypes_grouped.pdf", units="cm", width=13, height=9, dpi=300)
 
 ```
-## Stats of prevalence CRT_MDR1 haplotypes before and after 2019
+## Stats of frequency CRT_MDR1 haplotypes before and after 2019
 ```{r,echo=FALSE, message=FALSE, warning=FALSE}
 stats_hap_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
    rowwise() %>%
@@ -832,19 +841,25 @@ upset_plot_CRT_MDR1_CQ_MDAQ_PPQ<-
                                         y = chloroquine), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10())),
+           scale_y_log10(),
+           geom_hline(yintercept = 100, linetype="dashed",
+                color = "blue"))),
            "MDAQ\nIC50 (nM)" =
                            list(aes=aes(x= intersection, 
                                         y = MDAQ), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10())),
+           scale_y_log10(), 
+           geom_hline(yintercept = 80, linetype="dashed",
+                color = "blue"))),
           "PPQ\nIC50 (nM)" =
                            list(aes=aes(x= intersection, 
                                         y = piperaquine), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10()))),
+           scale_y_log10(),
+           geom_hline(yintercept = 135, linetype="dashed",
+                color = "blue")))),
           min_size =3, 
       height_ratio=1,
       width_ratio = 0.3,
@@ -878,19 +893,25 @@ upset_plot_CRT_MDR1_MFQ_LMF_DHA<-
                                         y = Mefloquine), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10())),
+           scale_y_log10(),
+           geom_hline(yintercept = 30, linetype="dashed",
+                color = "blue"))),
             "LMF\nIC50 (nM)" =
                            list(aes=aes(x= intersection, 
                                         y = Lumefantrine), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10())),
+           scale_y_log10(),
+           geom_hline(yintercept = 150, linetype="dashed",
+                color = "blue"))),
             "DHA\nIC50 (nM)" =
                            list(aes=aes(x= intersection, 
                                         y = DHA), 
                                          geom=list(
            geom_boxplot(na.rm = TRUE),
-           scale_y_log10()))),
+           scale_y_log10(),
+           geom_hline(yintercept = 10, linetype="dashed",
+                color = "blue")))),
           min_size =3, 
       height_ratio=1,
       width_ratio = 0.3 ,
