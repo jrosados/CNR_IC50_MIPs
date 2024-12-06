@@ -47,7 +47,7 @@ library(here)
 ```{r, echo=FALSE, message=FALSE}
 glm_database_cont<- readRDS(here("intermediate_data","glm_database_cont.rds"))
 
-MIP_MIP_data_all_plates<- readRDS(here("intermediate_data","MIP_MIP_data_all_plates.rds"))
+MIP_data_all_plates<- readRDS(here("intermediate_data","MIP_data_all_plates.rds"))
 ```
 
 # Convert columns of our database to SNP objects using **SNPassoc** package 
@@ -89,7 +89,7 @@ mutations_summary<- summary(glm_db.s[11:ncol(glm_db.s)]) %>%
          !str_detect(rowname, "ins"),
          !str_detect(rowname, "fs"),
          !str_detect(rowname, "dup")) %>%
-  inner_join(MIP_MIP_data_all_plates %>% dplyr::select(mutation_name,gene, aa_change) %>% mutate(mutation_name=   str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")), by =c("rowname" = "mutation_name")) %>%
+  inner_join(MIP_data_all_plates %>% dplyr::select(mutation_name,gene, aa_change) %>% mutate(mutation_name=   str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")), by =c("rowname" = "mutation_name")) %>%
   unique() %>%
   mutate(position_aa = str_extract(aa_change, "[1-9][0-9]{0,3}")) %>%
   group_by(gene) %>%
@@ -139,7 +139,7 @@ probes <- read.csv(here("raw_data", "all_haplotypes.csv")) %>%
   rename(gene = Gene,
           chr = Chrom)
 
-SNP_sort<- MIP_MIP_data_all_plates %>%
+SNP_sort<- MIP_data_all_plates %>%
   dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
   mutate(mutation_name = 
   #editing mutation names to match with the bonferroni table         
@@ -193,8 +193,8 @@ cut_off_pvalue = 0.05/nrow(multilocus_asoc_dha)
 ```{r, echo=FALSE, message=FALSE}
 manhattan <- function(x, chr="CHR", bp="BP", p="P", snp="SNP", 
                       col=c("gray10", "gray60"), chrlabs=NULL,
-                      suggestiveline=-log10(0.05), genomewideline=-log10(0.0001381215), 
-                      highlight=NULL, logp=TRUE, annotatePval = NULL, annotateTop = TRUE, ...) {
+#                     suggestiveline=-log10(0.05),
+                   genomewideline=-log10(0.0001381215),                       highlight=NULL, logp=TRUE, annotatePval = NULL, annotateTop = TRUE, ...) {
 
     # Not sure why, but package check will warn without this.
     CHR=BP=P=index=NULL
@@ -347,7 +347,7 @@ manhattan <- function(x, chr="CHR", bp="BP", p="P", snp="SNP",
     }
     
     # Add suggestive and genomewide lines
-    if (suggestiveline) abline(h=suggestiveline, col="blue")
+    #if (suggestiveline) abline(h=suggestiveline, col="blue")
     if (genomewideline) abline(h=genomewideline, col="red")
     
     # Highlight snps from a character vector
