@@ -147,20 +147,41 @@ ranking_year <- IC50_genotype %>%
   mutate(freq = n/sum(n)) %>%
   arrange(desc(freq))
 
-year_plot<- ranking_year %>%
-  mutate(year = as.factor(year)) %>%
-ggplot(aes(year, n)) + 
-  geom_bar(stat = "identity") +
+top_countries_year <- IC50_genotype %>%
+  left_join(ranking_country, by = "country") %>%
+  rename(admin = country) %>%
+  mutate(admin = case_when(admin =="Ivory Coast" ~ "Côte_d_Ivoire",
+    freq<"0.027" ~ "n < 20",
+                               TRUE ~ as.character(admin))) %>%
+  dplyr::select(year, admin) %>%
+  group_by(year, admin) %>%
+  summarise(n = n()) %>%
+  ungroup() %>%
+  mutate(Frequency = n/sum(n)) %>%
+  arrange(desc(Frequency)) %>%
+  mutate(year = as.factor(year))
+  
+
+top_countries_year$admin <-reorder(top_countries_year$admin, ifelse(!top_countries_year$admin %in% "Côte_d_Ivoire",0, top_countries_year$n), Fun = sum) 
+
+top_countries_year_plot<-  ggplot(data =top_countries_year, aes(year, n, 
+                                       fill = factor(admin, 
+                                  levels = c("n < 20", "Gabon",
+                                           "Benin","Chad","Central African Republic",                                                 "Senegal","Republic of the Congo",
+                                            "Guinea","Mali","Cameroon","Côte_d_Ivoire")))) +
+  geom_bar(position = "stack", stat = "identity", color = "black") +
+    scale_fill_brewer(palette = "Set3") +
   ggtitle("") + 
   ylab("Number of isolates") +
   xlab("year") + 
   scale_x_discrete( breaks=c("2016","2017", "2017","2018","2019","2020", "2021", "2022","2023"),
                     labels=c("2016","2017", "2017","2018","2019","2020", "2021", "2022","2023")) + ylim(0, 200) +
-  theme_classic(base_size = 12) +
-  theme(axis.text.x = element_text(angle=0, vjust=0.5, size = 6) )
+  theme_classic(base_size = 30) + 
+  guides(fill = guide_legend(title = "")) +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5, size = 25))
 
-print(year_plot)
-ggsave("figures/year_plot.pdf", units="cm", width=6, height=6.5, dpi=300)
+print(top_countries_year_plot)
+ggsave("figures/top_countries_year_plot.pdf", units="cm", width=28, height=22, dpi=300)
 
 ```
 
@@ -190,10 +211,12 @@ WAF_CAF_countries_before2019_after2019<- IC50_genotype %>%
    inner_join(WAF_CAF_class %>% dplyr::select(country,region), by = c("country")) %>%
   mutate( year = ifelse(year<=2018, "2016-18","2019-23"))
   
-WAF_CAF_countries_year_table<- table1(~  region | year
+WAF_CAF_regions_year_table<- table1(~  region | year
      , data = WAF_CAF_countries_before2019_after2019)
 
-write.csv(WAF_CAF_countries_year_table, "tables/WAF_CAF_countries_year_table.csv", row.names = F)
+write.csv(WAF_CAF_regions_year_table, "tables/WAF_CAF_regions_year_table.csv", row.names = F)
+
+
 
 ```
 
@@ -202,6 +225,32 @@ WAF_CAF_countries_year_stats<- CreateTableOne(vars = c("region"), strata = "year
 
 print(WAF_CAF_countries_year_stats,showAllLevels = TRUE,
       nonnormal = TRUE  )
+```
+
+```{r}
+
+#####################################################
+#   WAF AND CAF COUNTRIES STRATIFIED BY TIME PERIOD #
+#                                                   #
+#####################################################
+
+WAF_CAF_countries_year_table<- table1(~  country | year
+     , data = WAF_CAF_countries_before2019_after2019)
+
+write.csv(WAF_CAF_countries_year_table, "tables/WAF_CAF_countries_year_table.csv", row.names = F)
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+
+fisher.test(WAF_CAF_countries_before2019_after2019$country,
+           WAF_CAF_countries_before2019_after2019$year, simulate.p.value = TRUE)
+
+WAF_CAF_countries_year_stats<- CreateTableOne(vars = c("country"), strata = "year", data = WAF_CAF_countries_before2019_after2019)
+
+print(WAF_CAF_countries_year_stats,showAllLevels = TRUE,
+      nonnormal = TRUE)
+
 ```
 
 ```{r echo=F, eval=F}
