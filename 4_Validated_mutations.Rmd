@@ -154,13 +154,13 @@ gene =="dhps" | gene =="dhfr-ts"| gene=="crt"|gene=="mdr1" )
 
 ```
 
-## Prevalence of key mutations
+## Frequency of key mutations
 ```{r, echo=FALSE}
-prevalence_key_mutations <- mutation_prevalence(key_mutations_all_plates, threshold = 0) 
+frequency_key_mutations <- mutation_prevalence(key_mutations_all_plates, threshold = 0) 
 
-Key_mutations_plot<- prevalence_key_mutations %>%
+Key_mutations_plot<- frequency_key_mutations %>%
   mutate(mutation_name2 = mutation_name,
-         prevalence = num((prevalence*100),digits = 1),
+         frequency = num((prevalence*100),digits = 1),
          mutation_name = str_replace(mutation_name,"ts-","")) %>%
  separate_wider_delim(mutation_name2, "-", names = c("gene", "mutation"), too_many = "merge") %>%
   mutate(mutation = str_replace(mutation,"ts-","")) %>%
@@ -169,11 +169,11 @@ Key_mutations_plot<- prevalence_key_mutations %>%
   arrange(aa_coden_position,.by_group = TRUE) %>% 
   ungroup() %>%
   mutate(n_order = row_number()) %>%
-  ggplot(aes(reorder(mutation_name, n_order), prevalence, fill =  gene)) + 
+  ggplot(aes(reorder(mutation_name, n_order), frequency, fill =  gene)) + 
   geom_bar(stat = "identity") + 
   theme_classic2(base_size = 16) + 
   ylim(0,100)+
-  ylab("Prevalence (%)") + xlab("Amino acid change") +  ggtitle("") +
+  ylab("Frequency (%)") + xlab("Amino acid change") +  ggtitle("") +
   scale_fill_brewer(name = "Gene", palette = "Dark2") +
   theme(plot.title = element_text(hjust = 0.5),
        axis.text.x = element_text(angle=90, vjust=0.5, size = 12), 
@@ -181,13 +181,13 @@ Key_mutations_plot<- prevalence_key_mutations %>%
         legend.position ="bottom") 
            
 print(Key_mutations_plot)
-ggsave("figures/mut_key_prevalence.pdf", units="cm", width=19, height=14, dpi=300)
+ggsave("figures/mut_key_frequency.pdf", units="cm", width=19, height=14, dpi=300)
 
 ```
 
 ```{r}
 key_mutations_prev<-Key_mutations_plot$data %>%
-  mutate(prevalence = as.numeric(prevalence)) 
+  mutate(frequency = as.numeric(frequency)) 
 
 write.csv(key_mutations_prev, "tables/Key_mutations_prev.csv", row.names = FALSE)
 
@@ -208,19 +208,19 @@ k13 <- glm_database_cont%>%
   mutate(genotype = ifelse(genotype>=1,1,0),
          mutation = str_replace_all(mutation,"k13-","")) %>%
   group_by(mutation) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation),
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+    frequency = num((n_mutant*100/n_total),digits = 1)) %>%
   select(!c(sample,genotype)) %>%
   unique() %>%
   mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}")),
          Within_propeller_domain = ifelse(aa_coden_position<350,"N-ter","Propeller")) %>%
   arrange(aa_coden_position) %>% 
-  ggplot(aes(reorder(mutation, aa_coden_position), prevalence, fill = Within_propeller_domain)) + 
+  ggplot(aes(reorder(mutation, aa_coden_position), frequency, fill = Within_propeller_domain)) + 
   geom_bar(stat = "identity") + 
   theme_classic2(base_size = 12.3) + 
-  ylab("Prevalence (%)") + xlab("") + 
+  ylab("Frequency (%)") + xlab("") + 
   scale_fill_brewer(name = "WHO category", palette = "Dark2") +
   theme(plot.title = element_text(hjust = 0.5),
        axis.text.x = element_text(angle=90, vjust=0.5, size = 9), 
@@ -235,11 +235,11 @@ print(k13)
 ggsave("figures/k13_mutations.pdf", units="cm", width=15, height=9, dpi=300)
 ```
 ```{r}
-K13_prevalence<- k13$data %>%
-  mutate(prevalence = as.numeric(prevalence)) %>%
+K13_frequency<- k13$data %>%
+  mutate(frequency = as.numeric(frequency)) %>%
   filter(Within_propeller_domain=="Propeller")
 
-write.csv(K13_prevalence, "tables/K13_prevalence.csv", row.names = FALSE)
+write.csv(K13_frequency, "tables/K13_frequency.csv", row.names = FALSE)
 
 ```
 
@@ -268,10 +268,10 @@ select(mutation,genotype)%>%
   #we are including both monoclonal (homozygous , i.e. 2) and polyclonal (heterozygous, i.e. 1) and wild type monoclonal (homozygous, i.e. o)
   mutate(genotype = ifelse(genotype>=1,1,0))%>%
   group_by(mutation) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation), 
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+    frequency = num((n_mutant*100/n_total),digits = 1)) %>%
   select(!c(genotype)) %>%
   unique() 
 
@@ -309,10 +309,10 @@ select(mutation,genotype)%>%
   filter(!is.na(genotype)) %>%
   mutate(genotype = ifelse(genotype>=1,1,0)) %>%
   group_by(mutation) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation), 
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+    frequency = num((n_mutant*100/n_total),digits = 1)) %>%
   select(!c(genotype)) %>%
   unique() 
 
@@ -322,7 +322,7 @@ write_xlsx(other_mutations, "tables/other_mutations.xlsx")
 
 ```
 
-## Prevalence table per year 
+## Frequency table per year 
 ```{r}
 IC50_genotype_subset<-
                     IC50_genotype %>%
@@ -346,7 +346,7 @@ IC50_genotype_subset<-
 
 IC50_genotype_subset %>%
   filter(mutation %in% key_mutations_prev$mutation | 
-           mutation %in% K13_prevalence$mutation) %>%
+           mutation %in% K13_frequency$mutation) %>%
   select(year,gene,mutation,genotype) %>%
   mutate(year = as.character(year),
   year = case_when(year=="2020" ~ "2020-21", 
@@ -355,10 +355,10 @@ IC50_genotype_subset %>%
                           year=="2023" ~ "2022-23", 
                           TRUE~ year)) %>% 
   group_by(gene,mutation,year) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation),
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant*100/n_total),digits = 1)) %>%
+    frequency = num((n_mutant*100/n_total),digits = 1)) %>%
   select(!c(genotype, n_total, n_mutant)) %>%
   unique() %>%
   mutate(aa_coden_position = as.numeric(str_extract(mutation, "[1-9][0-9]{0,3}"))) %>%
@@ -367,7 +367,7 @@ IC50_genotype_subset %>%
   ungroup() %>%
   mutate(n_order = row_number()) %>%
   select(!c(aa_coden_position, n_order)) %>%
-  pivot_wider(names_from = year, values_from = prevalence) %>%
+  pivot_wider(names_from = year, values_from = frequency) %>%
   DT::datatable(
     extensions = 'Buttons',
     options = list(dom = 'Bfrtip',
@@ -422,7 +422,7 @@ IC50_genotype_subset_raw<- IC50_genotype %>%
 key_genotype_subset_raw<-
 IC50_genotype_subset_raw %>%
   filter(mutation %in% key_mutations_prev$mutation | 
-           mutation %in% K13_prevalence$mutation) %>%
+           mutation %in% K13_frequency$mutation) %>%
   mutate(year = as.character(year),
   year = case_when(year=="2020" ~ "2020-21", 
                           year=="2021"  ~ "2020-21", 
@@ -499,20 +499,20 @@ mutations_trend_time<- IC50_genotype_subset %>%
                           year=="2023" ~ "2022-23", 
                           TRUE~ year)) %>% 
   group_by(mutation, year) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation),
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant/n_total),digits = 2),
-         m = (qbinom(0.5, size=n_total, prob=prevalence))/n_total,
-         lim_inf = (qbinom( 0.025, size=n_total, prob=prevalence))/n_total,
-         lim_sup = (qbinom( 0.975, size=n_total, prob=prevalence))/n_total) %>%
+    frequency = num((n_mutant/n_total),digits = 2),
+         m = (qbinom(0.5, size=n_total, prob=frequency))/n_total,
+         lim_inf = (qbinom( 0.025, size=n_total, prob=frequency))/n_total,
+         lim_sup = (qbinom( 0.975, size=n_total, prob=frequency))/n_total) %>%
   select(!c(genotype, n_total, n_mutant, sample, country)) %>%
   unique() %>%
-  ggplot(aes(year, prevalence, group = mutation, colour = mutation)) + 
+  ggplot(aes(year, frequency, group = mutation, colour = mutation)) + 
   geom_point(size = 2) +  geom_line() + 
   geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
   scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) + 
-  ylab("Prevalence (%)") + xlab ("Year") + 
+  ylab("Frequency (%)") + xlab ("Year") + 
   theme_classic() +
   theme(plot.title = element_text(hjust = 0.5),
         axis.title= element_text(size = 18),
@@ -524,7 +524,7 @@ print(mutations_trend_time)
 ggsave("figures/mutations_trend_time.pdf", units="cm", width=19, height=14, dpi=300)
 
 ```
-# Prevalence of key resistance mutations by year and by country
+# Frequency of key resistance mutations by year and by country
 ```{r}
 mutations_trend_time_top_ten_countries<- IC50_genotype_subset %>%
       filter(mutation == "Lys76Thr" | 
@@ -545,20 +545,20 @@ mutations_trend_time_top_ten_countries<- IC50_genotype_subset %>%
                            levels=c("Ivory Coast","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad", "Gabon", "Benin"),
                            labels = c("Côte d'Ivoire","Cameroon","Mali", "Guinea","Republic of the Congo", "Senegal", "Central African Republic", "Chad", "Gabon", "Benin"))) %>% 
   group_by(mutation, year, country) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the prevalence
+  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
   mutate(n_total = length(mutation),
          n_mutant = sum(genotype==1),
-    prevalence = num((n_mutant/n_total),digits = 2),
-         m = (qbinom(0.5, size=n_total, prob=prevalence))/n_total,
-         lim_inf = (qbinom( 0.025, size=n_total, prob=prevalence))/n_total,
-         lim_sup = (qbinom( 0.975, size=n_total, prob=prevalence))/n_total) %>%
+    frequency = num((n_mutant/n_total),digits = 2),
+         m = (qbinom(0.5, size=n_total, prob=frequency))/n_total,
+         lim_inf = (qbinom( 0.025, size=n_total, prob=frequency))/n_total,
+         lim_sup = (qbinom( 0.975, size=n_total, prob=frequency))/n_total) %>%
   select(!c(genotype, n_total, n_mutant, sample)) %>%
   unique() %>%
-  ggplot(aes(year, prevalence, group = mutation, colour = mutation)) + 
+  ggplot(aes(year, frequency, group = mutation, colour = mutation)) + 
   geom_point(size = 2) +  geom_line() + 
   geom_pointrange(aes(x =year, ymin=lim_inf, ymax=lim_sup),alpha = 0.5 ) +
   scale_colour_brewer(palette = "Set1") + scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) + 
-  ylab("Prevalence (%)") + xlab ("Year") + 
+  ylab("Frequency (%)") + xlab ("Year") + 
   theme_classic() +
   theme(axis.text.x = element_text(angle = 90))+
   facet_wrap(~country) 
