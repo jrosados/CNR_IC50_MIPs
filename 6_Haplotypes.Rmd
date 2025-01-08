@@ -730,7 +730,7 @@ haplotype_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
   unique() %>%
   mutate(haplotype = factor(haplotype,
                            levels=c("Pfcrt-76T | Pfmdr1-86Y","Pfcrt-76T | Pfmdr1-N86","Pfcrt-K76 | Pfmdr1-86Y", "Pfcrt-K76 | Pfmdr1-N86"),
-                           labels = c("crt 76T + mdr186Y","crt 76T + mdr1 N86","crt K76 + mdr1 86Y","crt K76 + mdr1 N86"))) %>%
+                           labels = c("crt 76Thr - mdr186Tyr","crt 76Thr - mdr1 Asn86","crt Lys76 - mdr1 86Tyr","crt Lys76 - mdr1 Asn86"))) %>%
  ggplot(aes(year, frequency, colour = haplotype, fill = haplotype)) +
   geom_bar( stat = "identity", color = "black") +
   ylab("Frequency (%)") + xlab("Year") + theme_classic() +
