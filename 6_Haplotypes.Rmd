@@ -946,6 +946,62 @@ ggsave("figures/upset_plot_CRT_MDR1_MFQ_LMF_DHA.pdf", device = cairo_pdf, units=
 
 ```
 
+#Linear regression model of IC50 and CRT_MDR haplotypes over time
+```{r}
+
+data <- CRT_MDR1_haplotypes_associa
+
+#remove lines acking genotype data for CRT and MDR1
+data <- data[!is.na(data$`crt-Lys76Thr`), ]
+data <- data[!is.na(data$`mdr1-Asn86Tyr`), ]
+
+#generation of CRT-MDR1 haplotypes
+data$combine=NA
+for(i in 1:nrow(data)){
+  if(data$`crt-Lys76Thr`[i]==0 && data$`mdr1-Asn86Tyr`[i]==0){
+    data$combine[i]="all_WT"
+  }else if(data$`crt-Lys76Thr`[i]==1 && data$`mdr1-Asn86Tyr`[i]==0){
+    data$combine[i]="CRT_mix"
+  }else if(data$`crt-Lys76Thr`[i]==2 && data$`mdr1-Asn86Tyr`[i]==0){
+    data$combine[i]="CRT"
+  }else if(data$`crt-Lys76Thr`[i]==0 && data$`mdr1-Asn86Tyr`[i]==1){
+    data$combine[i]="MDR_mix"
+  }else if(data$`crt-Lys76Thr`[i]==0 && data$`mdr1-Asn86Tyr`[i]==2){
+    data$combine[i]="MDR"
+  }else if(data$`crt-Lys76Thr`[i]==1 && data$`mdr1-Asn86Tyr`[i]==1){
+    data$combine[i]="CRT_mix_MDR_mix"
+  }else if(data$`crt-Lys76Thr`[i]==2 && data$`mdr1-Asn86Tyr`[i]==2){
+    data$combine[i]="MDR_CRT"
+  }else if(data$`crt-Lys76Thr`[i]==2 && data$`mdr1-Asn86Tyr`[i]==1){
+    data$combine[i]="CRT_MDR_mix"
+  }else if(data$`crt-Lys76Thr`[i]==1 && data$`mdr1-Asn86Tyr`[i]==2){
+    data$combine[i]="CRT_mix_MDR"
+  }
+}
+
+#discard mixed data
+data = data[data$combine %in% c("all_WT", "CRT", "MDR", "MDR_CRT"),]
+data$combine <- as.factor(data$combine)  
+
+##################
+# Lumefantrine   #
+#                #
+##################
+
+#regression model
+model_LMF <- lm(as.formula(paste("Lumefantrine", "~ year + combine")), data = data)
+summary(model_LMF)
+
+#################
+# MDAQ          #
+#################
+
+#regression model
+model_MDAQ <- lm(as.formula(paste("MDAQ", "~ year + combine")), data = data)
+summary(model_MDAQ)
+
+```
+
 ```{r echo=F, eval=F}
 save.image("./intermediate_data/haplotypes_data.RData")
 ```
