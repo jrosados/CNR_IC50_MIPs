@@ -19,8 +19,7 @@ For more details on MIPs for Drug Resistance see <https://doi.org/10.1093/infdis
 # 2.- Epidemiological data
 	2.1 - Epitable
 	2.2 - Geographical distribution of samples
-	2.3 - Distribution of countries per region in 2016-18 versus 2019-23
-
+	
 # 3.- Half-maximal inhibitory concentration IC50
 	3.1.- Drug correlation matrix
 	3.2.- Drug susceptibility by year
