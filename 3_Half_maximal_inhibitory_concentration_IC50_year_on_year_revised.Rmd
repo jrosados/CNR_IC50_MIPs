@@ -1,0 +1,550 @@
+---
+title: "Half-maximal inhibitory concentration IC50"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(table1)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(jtools)
+library(ggpubr)
+library(corrplot)
+library(ggcorrplot)
+library(forcats)
+library(here)
+library(tableone)
+```
+
+#Loading data from previous runs
+```{r, include=FALSE}
+IC50_genotype <- readRDS(here("intermediate_data", "IC50_genotype.rds"))
+
+WAF_CAF_class <- readRDS(here("intermediate_data", "WAF_CAF_class.rds")) 
+```
+
+
+# Half-maximal inhibitory concentration (IC50) for six antimalarial drugs
+
+## Drug correlation matrix
+```{r, echo=FALSE, message=FALSE}
+
+data_drug<-IC50_genotype %>%
+  dplyr::select(DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  #data is log10 transform to get normal distribution
+  mutate(DHA = log10(DHA), Lumefantrine =log10(Lumefantrine), Mefloquine = log10(Mefloquine), MDAQ = log10(MDAQ), chloroquine = log10(chloroquine),piperaquine = log10(piperaquine)) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ)
+
+#we use pearson correlation as the IC50 has now a normal distribution
+ct2=cor(data_drug, method = "pearson")
+
+
+p.mat <- cor_pmat(data_drug, "pearson", alternative = "two.sided")
+
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+drug_correlation<- ggcorrplot(ct2, p.mat= p.mat,hc.order = TRUE, type = "lower", outline.col = "black",  
+           lab = TRUE, insig = "blank", ggtheme = ggplot2::theme_classic(base_size = 12)) 
+print(drug_correlation)
+ggsave("figures/drug_correlation.pdf", units="cm", width=19, height=15, dpi=300)
+
+```
+# Drug susceptibility by year
+```{r}
+IC50_year<- IC50_genotype %>%
+  dplyr::select(year, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))
+
+IC50_year_table<- table1(~  DHA+ 
+         Lumefantrine + Mefloquine + MDAQ + chloroquine +
+        piperaquine | year
+     , data = IC50_year,render.continuous = c("Median [Q1, Q3]") )
+
+write.csv(IC50_year_table, "tables/IC50_year_table.csv", col.names = F)
+
+```
+
+
+```{r, echo=FALSE, message=FALSE}
+DHA<- IC50_genotype %>%
+  dplyr::select(year, DHA) %>%
+  rename(Dihydroartemisinin = DHA) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Dihydroartemisinin,fill =year)) + scale_y_log10() +
+   geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 6, linetype="dashed",
+               color = "red", size=1) +
+  ylab("IC50(nM)") + xlab("")+
+ggtitle("Dihydroartemisinin") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+Lumefantrine<- IC50_genotype %>%
+  dplyr::select(year, Lumefantrine) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Lumefantrine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 150, linetype="dashed",
+                color = "red", size=1) +
+  ylab("") + xlab("")+
+ggtitle("Lumefantrine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+Mefloquine<- IC50_genotype %>%
+  dplyr::select(year, Mefloquine) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Mefloquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 30, linetype="dashed",
+                color = "red", size=1) +
+  ylab("") + xlab("")+
+ggtitle("Mefloquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+Monodesethylamodiaquine<- IC50_genotype %>%
+  dplyr::select(year, MDAQ) %>%
+  rename(Monodesethylamodiaquine = MDAQ) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Monodesethylamodiaquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 80, linetype="dashed",
+                color = "red", size=1) +
+  ylab("IC50(nM)") + xlab("")+
+ggtitle("Monodesethylamodiaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+Chloroquine<- IC50_genotype %>%
+  dplyr::select(year, chloroquine) %>%
+  rename(Chloroquine = chloroquine) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Chloroquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 100, linetype="dashed",
+                color = "red", size=1) +
+  ylab("") + xlab("")+
+ggtitle("Chloroquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+Piperaquine<- IC50_genotype %>%
+  dplyr::select(year, piperaquine) %>%
+  rename(Piperaquine = piperaquine) %>%
+  mutate(year = as.character(year),
+  year = case_when(year=="2020" ~ "2020-21", 
+                          year=="2021"  ~ "2020-21", 
+                        year=="2022" ~ "2022-23", 
+                          year=="2023" ~ "2022-23", 
+                          TRUE~ year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Piperaquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 135, linetype="dashed",
+                color = "red", size=1) +
+  ylab("") + xlab("")+
+ggtitle("Piperaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )
+
+drugs_dist<- ggarrange(DHA, Lumefantrine, Mefloquine,Monodesethylamodiaquine,
+          Chloroquine,Piperaquine,
+                              ncol=3, nrow=2, common.legend = TRUE, legend="bottom")
+print(drugs_dist)
+
+ggsave("figures/drug_dist_yearly.pdf", units="cm", width=22, height=14, dpi=300)
+
+  
+```
+
+
+## Calculate Kendall's tau and its associated p-value
+```{r}
+library(Kendall)
+#2020 represents "2020-21" period  
+#2021 represents "2022-23" period
+
+DHA_trend<-c(1.10,1.16,1.05,0.940,1.28,	1.42) #These are IC50 median per year
+year<- c(2016, 2017, 2018, 2019, 2020, 2021) 
+tau_result_DHA <- cor.test(DHA_trend, year, method = "kendall")
+
+LMF_trend<-c(15.5,14.7,11.3,18.0,24.8 ,25.3)
+tau_result_LMF <- cor.test(LMF_trend, year, method = "kendall")
+
+MFQ_trend<-c(33.3 ,	40.5 ,	23.7 ,	20.1,	40.7 ,	30.6) 
+tau_result_MFQ <- cor.test(MFQ_trend, year, method = "kendall")
+
+MDAQ_trend<-c(19.7,	19.0 , 25.3, 35.0, 36.9, 34.8) 
+tau_result_MDAQ <- cor.test(MDAQ_trend, year, method = "kendall")
+
+CQ_trend<-c(24.3,27.3, 29.8,28.7, 29.8, 19.3) 
+tau_result_CQ <- cor.test(CQ_trend, year, method = "kendall")
+
+PPQ_trend<-c(18.0,19.6, 16.1, 19.1, 25.4, 19.5) 
+tau_result_PPQ <- cor.test(PPQ_trend, year, method = "kendall")
+```
+
+
+```{r}
+# Install if needed
+install.packages("trend")  # For Mann-Kendall test
+install.packages("dplyr")   # For data wrangling
+install.packages("ggplot2") # For plotting trends
+```
+
+## Calculate Kendall's tau (aggregate data) and its associated p-value with Trend package
+```{r}
+
+library(trend)
+
+DHA_trend<-c(1.10,1.16,1.05,0.940,1.28,	1.42) #These are IC50 median per year
+year<- c(2016, 2017, 2018, 2019, 2020, 2021) 
+mk_result_DHA <- mk.test(DHA_trend)
+
+LMF_trend<-c(15.5,14.7,11.3,18.0,24.8 ,25.3)
+mk_result_LMF <- mk.test(LMF_trend)
+
+MFQ_trend<-c(33.3 ,	40.5 ,	23.7 ,	20.1,	40.7 ,	30.6) 
+mk_result_MFQ <- mk.test(MFQ_trend)
+
+MDAQ_trend<-c(19.7,	19.0 , 25.3, 35.0, 36.9, 34.8) 
+mk_result_MDAQ <- mk.test(MDAQ_trend)
+
+CQ_trend<-c(24.3,27.3, 29.8,28.7, 29.8, 19.3) 
+mk_result_CQ <- mk.test(CQ_trend)
+
+PPQ_trend<-c(18.0,19.6, 16.1, 19.1, 25.4, 19.5) 
+mk_result_PPQ <- mk.test(PPQ_trend)
+```
+
+# IC50 data stratified into 2016-17 vs 2018-23 periods
+```{r}
+IC50_before2017_after2017 <- IC50_genotype %>%
+  dplyr::select(year, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  mutate( year = ifelse(year<=2017, "2016-17","2018-23"))
+
+```
+
+## Distribution of resistant isolates in 2016-17 versus 2018-23
+-Pascual- Aurélie- Marilyn Madamet- Sébastien Briolant- Tiphaine Gaillard- Rémy Amalvict- Nicolas Benoit- Dominique Travers- Bruno Pradines- and French National Reference Centre for Imported Malaria Study Group. 2015. “Multinormal in Vitro Distribution of Plasmodium Falciparum Susceptibility to Piperaquine and Pyronaridine.” Malaria Journal 14 (February): 49.
+-Kaddouri- Halima- Abdoulaye Djimdé- Souleymane Dama- Aly Kodio- Mamadou Tekete- Véronique Hubert- Aminatou Koné- et al. 2008. “Baseline in Vitro Efficacy of ACT Component Drugs on Plasmodium Falciparum Clinical Isolates from Mali.” International Journal for Parasitology 38 (7): 791–98.
+```{r}
+Category_drugs<- IC50_genotype %>%
+  dplyr::select(year, country ,DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
+  rename(Dihydroartemisinin = DHA,
+         Chloroquine = chloroquine,
+         Piperaquine = piperaquine,
+         Monodesethylamodiaquine = MDAQ) %>%
+  mutate(year = as.factor(year),
+  LMF_cat = ifelse(Lumefantrine>150, "R","S"), #Kaddouri 2008
+  DHA_cat = ifelse(Dihydroartemisinin>10,"R","S"), #Kaddouri 2008
+  MFQ_cat = ifelse(Mefloquine>30, "R", "S"), #Pradines 2002
+  PPQ_cat = ifelse(Piperaquine>135, "R", "S"), #Pradines 2002   
+  CQ_cat = ifelse(Chloroquine>100,"R", "S"),#Kaddouri 2008
+  MDAQ_cat = ifelse(Monodesethylamodiaquine>80,"R", "S")) #Kaddouri 2008
+ 
+
+LUM_MFQ_scatter<-
+ggplot(Category_drugs, aes(x=Lumefantrine, 
+                                      y = Mefloquine, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 30, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 150, linetype="dashed", 
+                 color = "blue", linewidth=1) +
+  theme_light(base_size = 14)
+print(LUM_MFQ_scatter)
+ggsave("figures/LUM_MFQ_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+
+LUM_DHA_scatter<-
+ggplot(Category_drugs, aes(x= Lumefantrine, 
+                                      y = Dihydroartemisinin, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 10, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 150, linetype="dashed", 
+                 color = "blue", linewidth=1)+
+  theme_light(base_size = 16) + theme(axis.title= element_text(size = 18))
+              
+print(LUM_DHA_scatter)
+ggsave("figures/LUM_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+MFQ_DHA_scatter<-
+ggplot(Category_drugs, aes(x= Mefloquine, 
+                                      y = Dihydroartemisinin, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 10, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 30, linetype="dashed", 
+                 color = "blue", linewidth=1)+
+  theme_light(base_size = 16) + theme(axis.title= element_text(size = 18))
+print(MFQ_DHA_scatter)
+ggsave("figures/MFQ_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+
+PPQ_DHA_scatter<-
+ggplot(Category_drugs, aes(x= Piperaquine, 
+                                      y = Dihydroartemisinin, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 10, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 135, linetype="dashed", 
+                 color = "blue", linewidth=1)+
+  theme_light(base_size = 16) + theme(axis.title= element_text(size = 18))
+print(PPQ_DHA_scatter)
+ggsave("figures/PPQ_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+MDAQ_DHA_scatter<-
+ggplot(Category_drugs, aes(x= Monodesethylamodiaquine, 
+                                      y = Dihydroartemisinin, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 10, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 80, linetype="dashed", 
+                 color = "blue", linewidth=1)  +
+  theme_light(base_size = 16) + theme(axis.title= element_text(size = 18))
+
+print(MDAQ_DHA_scatter)
+ggsave("figures/MDAQ_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+
+CQ_DHA_scatter<-
+ggplot(Category_drugs, aes(x= Chloroquine, 
+                                      y = Dihydroartemisinin, colour = year)) + 
+         geom_point() + 
+   geom_hline(yintercept = 10, linetype="dashed", 
+                 color = "red", linewidth=1) + 
+  geom_vline(xintercept = 100, linetype="dashed", 
+                 color = "blue", linewidth=1) +
+  theme_light(base_size = 16) + theme(axis.title= element_text(size = 18))
+print(CQ_DHA_scatter)
+ggsave("figures/CQ_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
+
+```
+
+# IC50 distribution in 2016-17 vs 2018-23 period
+```{r}
+DHA_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, DHA) %>%
+  rename(Dihydroartemisinin = DHA) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Dihydroartemisinin,fill =year)) + scale_y_log10() +
+   geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 10, linetype="dashed", 
+                color = "red", linewidth=1) + 
+  ylab("IC50(nM)") + xlab("")+
+ggtitle("Dihydroartemisinin") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+  stat_compare_means(aes(group = year), label = "p.format", size = 4) #+
+  #stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)
+
+Lumefantrine_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, Lumefantrine) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Lumefantrine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 150, linetype="dashed",
+                color = "red", linewidth=1) +
+  ylab("") + xlab("")+
+ggtitle("Lumefantrine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+  stat_compare_means(aes(group = year), label = "p.format", size = 4)
+
+Mefloquine_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, Mefloquine) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Mefloquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 30, linetype="dashed",
+                color = "red", linewidth=1) +
+  ylab("") + xlab("")+
+ggtitle("Mefloquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )+
+  stat_compare_means(aes(group = year), label = "p.format", size = 4)
+
+Monodesethylamodiaquine_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, MDAQ) %>%
+  rename(Monodesethylamodiaquine = MDAQ) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Monodesethylamodiaquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 80, linetype="dashed",
+                color = "red", linewidth=1) +
+  ylab("IC50(nM)") + xlab("")+
+ggtitle("Monodesethylamodiaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )+
+  stat_compare_means(aes(group = year), label = "p.format", size = 4)
+
+Chloroquine_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, chloroquine) %>%
+  rename(Chloroquine = chloroquine) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Chloroquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 100, linetype="dashed",
+                color = "red", linewidth=1) +
+  ylab("") + xlab("")+
+ggtitle("Chloroquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+  stat_compare_means(aes(group = year), label = "p.format", size = 4)
+
+Piperaquine_2016_2023_group<- IC50_before2017_after2017 %>%
+  dplyr::select(year, piperaquine) %>%
+  rename(Piperaquine = piperaquine) %>%
+  mutate(year = as.character(year))%>%
+  group_by(year) %>%
+  ggplot(aes(year, Piperaquine, fill =year )) + scale_y_log10() +
+  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
+  geom_hline(yintercept = 135, linetype="dashed",
+                color = "red", linewidth=1) +
+  ylab("") + xlab("")+
+ggtitle("Piperaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
+  stat_compare_means(aes(group = year), label = "p.format", size = 4)
+
+drugs_dist__2016_2023_group<- ggarrange(DHA_2016_2023_group, Lumefantrine_2016_2023_group, Mefloquine_2016_2023_group,Monodesethylamodiaquine_2016_2023_group,
+          Chloroquine_2016_2023_group,Piperaquine_2016_2023_group,
+                              ncol=3, nrow=2, common.legend = TRUE, legend="bottom")
+ggsave("figures/drug_dist_2016_2023_group_cut_off.pdf", units="cm", width=22, height=14, dpi=300)
+```
+
+## Stats for IC50 distribution
+```{r}
+IC50_table<- table1(~  DHA+ 
+         Lumefantrine + Mefloquine + MDAQ + chloroquine +
+        piperaquine
+     , data = IC50_genotype,render.continuous = c("Median [Q1, Q3]") )
+
+write.csv(IC50_table, "tables/IC50_table.csv", col.names = F)
+
+
+```
+
+# Drug susceptibility by African region
+```{r}
+
+############################
+#                          #
+# WAF AND CAF REGIONS IC50 #
+#                          #
+############################
+
+WAF_CAF_countries_IC50<- IC50_genotype %>%
+  dplyr::select(sample, country, year,Lumefantrine,DHA,Mefloquine,MDAQ,
+                chloroquine,piperaquine) %>%
+   inner_join(WAF_CAF_class %>% dplyr::select(country,region), by = c("country")) 
+ #%>%  mutate( year = ifelse(year<=2017, "2016-17","2018-23"))
+  
+WAF_CAF_IC_countries_table<- table1(~  Lumefantrine + DHA + Mefloquine + MDAQ +
+                chloroquine + piperaquine  |region 
+     , data = WAF_CAF_countries_IC50,render.continuous = c("Median [Q1, Q3]") )
+
+write.csv(WAF_CAF_IC_countries_table, "tables/WAF_CAF_countries_IC50_table.csv", row.names = F)
+
+```
+
+## Comparison of IC50 between Central and West African countries and adjusted pvalues
+```{r}
+WAF_CAF_IC_region_year_stats<- CreateTableOne(vars = c("Lumefantrine", "DHA" , "Mefloquine" , "MDAQ" ,"chloroquine" , "piperaquine"), strata = c("region"), data = WAF_CAF_countries_IC50)
+
+print(WAF_CAF_IC_region_year_stats,showAllLevels = TRUE,
+      nonnormal = TRUE  )
+
+#Wilcoxon test
+wilcox.test(WAF_CAF_countries_IC50$Lumefantrine
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$Lumefantrine[WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+wilcox.test(WAF_CAF_countries_IC50$MDAQ 
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$MDAQ [WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+wilcox.test(WAF_CAF_countries_IC50$piperaquine 
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$piperaquine [WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+wilcox.test(WAF_CAF_countries_IC50$chloroquine  
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$chloroquine  [WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+wilcox.test(WAF_CAF_countries_IC50$DHA  
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$DHA   [WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+wilcox.test(WAF_CAF_countries_IC50$Mefloquine  
+            [WAF_CAF_countries_IC50$region=="CAF"], WAF_CAF_countries_IC50$Mefloquine   [WAF_CAF_countries_IC50$region=="WAF"], data= WAF_CAF_countries_IC50)
+
+#pvalues extracted by Wilcoxon test 
+pvalues_regions<- c(0.7694 , 0.2418 , 0.0002728, 0.3782 , 0.1191, 0.7383)
+
+p.adjust(pvalues_regions,method="BH")
+
+#0.7694000 0.4836000 0.0016368 0.5673000 0.3573000 0.7694000 #adjusted P-values
+```
+## Stats for resistant isolates defined by cut-offs 
+```{r}
+Category_drugs_table<- table1(~  LMF_cat+ 
+         DHA_cat + MFQ_cat + PPQ_cat + CQ_cat +
+        MDAQ_cat 
+     , data = Category_drugs)
+
+write.csv(Category_drugs_table, "tables/Category_drugs_table.csv", col.names = F)
+
+```
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/IC50_analysis_revised.RData")
+```
+
+
+
