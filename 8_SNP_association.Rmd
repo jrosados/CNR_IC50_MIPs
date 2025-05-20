@@ -122,7 +122,7 @@ If an expected model of inheritance is hypothesized, the association analysis fo
 For multiple SNP data, our objective is to identify the variants that are significantly associated with the trait. The most basic strategy is, therefore, to fit an association test like the one described above for each of the SNPs in the dataset and determine which of those associations are significant. We are adjusting the association by country anb year
 
 ```{r, warning=FALSE, message=FALSE}
-multilocus_asoc_dha<- WGassociation(DHA ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+multilocus_asoc_dha<- WGassociation(log10(DHA) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 #head(multilocus_asoc_dha)
 ```
@@ -450,7 +450,7 @@ DHA_plot_continous$data %>%
 ```
 # SNP association analysis for Lumefantrine 
 ```{r, warning=FALSE}
-multilocus_asoc_lum<- WGassociation(Lumefantrine ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+multilocus_asoc_lum<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 ```
 
@@ -550,7 +550,7 @@ lum_plot_continous$data %>%
 
 # SNP association analysis for Mefloquine 
 ```{r, warning=FALSE}
-multilocus_asoc_meflo<- WGassociation(Mefloquine ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE, model = "dominant", genotypingRate = 69)
+multilocus_asoc_meflo<- WGassociation(log10(Mefloquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE, model = "dominant", genotypingRate = 69)
 
 #head(multilocus_asoc_meflo)
 ```
@@ -644,7 +644,7 @@ meflo_plot_continuous$data %>%
 # SNP association analysis for MDAQ 
 
 ```{r, warning=FALSE}
-multilocus_asoc_MDAQ<- WGassociation(MDAQ ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+multilocus_asoc_MDAQ<- WGassociation(log10(MDAQ) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 #head(multilocus_asoc_MDAQ)
 ```
@@ -739,7 +739,7 @@ MDAQ_plot_continuous$data %>%
 
 # SNP association analysis for chloroquine 
 ```{r, warning=FALSE}
-multilocus_asoc_chloroquine<- WGassociation(chloroquine ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+multilocus_asoc_chloroquine<- WGassociation(log10(chloroquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 #head(multilocus_asoc_chloroquine)
 ```
@@ -830,12 +830,13 @@ chloroquine_plot_continous$data %>%
                    buttons = c('excel', 'csv'))
   )
 
+
 ```
 
 # SNP association analysis for piperaquine 
 
 ```{r, warning=FALSE}
-multilocus_asoc_piperaquine<- WGassociation(piperaquine ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+multilocus_asoc_piperaquine<- WGassociation(log10(piperaquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 #head(multilocus_asoc_piperaquine)
 ```
@@ -889,19 +890,42 @@ glm_database_cont %>%
   filter(mutation_name %in% row.names(bonf_piperaquine_conti),
   #remove NA genotypes
          !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
   mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
-                              genotype == 1| genotype == 2 ~ "Mutant")),
-         genotype = fct_relevel(genotype, c("Wild type","Mutant"))) %>%
-  ggplot(aes(genotype, piperaquine)) +
-  geom_boxplot(aes(colour = genotype)) +
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%                            ggplot(aes(genotype, piperaquine, fill = genotype)) +
+  geom_boxplot(#aes(colour = genotype)
+    ) + scale_fill_brewer(palette="Set2") +
   stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
   stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
-  scale_y_log10() +
-  facet_wrap(~mutation_name)
-# 
-# print(chloroquine_plot_continous)
+  scale_y_log10() + ylab("Chloroquine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+ 
+print(piperaquine_plot_continous)
 ```
 
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+piperaquine_plot_continous$data %>%
+  dplyr::select(mutation_name, genotype,piperaquine)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (piperaquine),
+          Q1 = quantile(piperaquine, 0.25),
+          Q3 = quantile(piperaquine, 0.75))%>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
 # Manhattan plots
 ```{r, echo=FALSE, message=FALSE}
 
@@ -959,22 +983,22 @@ glm_db_withoutCRT76_356<- glm_db_withoutCRT76_356 %>%
 
 ```{r, warning=FALSE, message=FALSE}
 
-DHA_crt76_crt356<- WGassociation(DHA ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+DHA_crt76_crt356<- WGassociation(log10(DHA) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-lum_crt76_crt356<- WGassociation(Lumefantrine ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+lum_crt76_crt356<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-meflo_crt76_crt356<- WGassociation(Mefloquine ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+meflo_crt76_crt356<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-MDAQ_crt76_crt356<- WGassociation(MDAQ ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+MDAQ_crt76_crt356<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-chloroquine_crt76_crt356<- WGassociation(chloroquine ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+chloroquine_crt76_crt356<- WGassociation(log10(chloroquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-piperaquine_crt76_crt356<- WGassociation(piperaquine ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+piperaquine_crt76_crt356<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
                       , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 ```
@@ -1019,22 +1043,22 @@ glm_db_withoutCRT76<- glm_db_withoutCRT76 %>%
 
 ```{r, warning=FALSE, message=FALSE}
 
-DHA_crt76<- WGassociation(DHA ~ country + year + median_coi + `crt-Lys76Thr` 
+DHA_crt76<- WGassociation(log10(DHA) ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-lum_crt76<- WGassociation(Lumefantrine ~ country + year + median_coi + `crt-Lys76Thr` 
+lum_crt76<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-meflo_crt76<- WGassociation(Mefloquine ~ country + year + median_coi + `crt-Lys76Thr` 
+meflo_crt76<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-MDAQ_crt76<- WGassociation(MDAQ ~ country + year + median_coi + `crt-Lys76Thr` 
+MDAQ_crt76<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 chloroquine_crt76<- WGassociation(chloroquine ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-piperaquine_crt76<- WGassociation(piperaquine ~ country + year + median_coi + `crt-Lys76Thr` 
+piperaquine_crt76<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `crt-Lys76Thr` 
                       , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 ```
@@ -1079,22 +1103,22 @@ glm_db_withoutMDR86<- glm_db_withoutMDR86 %>%
 
 ```{r, warning=FALSE, message=FALSE}
 
-DHA_mdr1_86<- WGassociation(DHA ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+DHA_mdr1_86<- WGassociation(log10(DHA) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-lum_mdr1_86<- WGassociation(Lumefantrine ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+lum_mdr1_86<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-meflo_mdr1_86<- WGassociation(Mefloquine ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+meflo_mdr1_86<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-MDAQ_mdr1_86<- WGassociation(MDAQ ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+MDAQ_mdr1_86<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-chloroquine_mdr1_86<- WGassociation(chloroquine ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+chloroquine_mdr1_86<- WGassociation(log10(chloroquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
-piperaquine_mdr1_86<- WGassociation(piperaquine ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+piperaquine_mdr1_86<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
                       , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
 
 ```
