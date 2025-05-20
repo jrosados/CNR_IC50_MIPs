@@ -24,8 +24,8 @@ For more details on MIPs for Drug Resistance see <https://doi.org/10.1093/infdis
 # 3.- Half-maximal inhibitory concentration IC50
 	3.1.- Drug correlation matrix
 	3.2.- Drug susceptibility by year
-	3.3.- IC50 data stratified into 2016-18 vs 2019-23 periods
-	3.4.- Drug susceptibility in 2016-18 versus 2019-23 by African region
+	3.3.- Distribution of resistant isolates 
+	3.4.- Drug susceptibility by African region
 
 # 4- Validated_mutations
 	4.1.- Prevalence of validated key mutations
@@ -50,18 +50,15 @@ For more details on MIPs for Drug Resistance see <https://doi.org/10.1093/infdis
 	6.7.- Time trend of CRT_MDR1 haplotypes
 	6.8.- Grouped prevalence of CRT_MDR1 haplotypes before and after 2019
 
-# 7.- LD
-	7.1.- LD Plot of Ivory Coast and Cameroon samples
-
-# 8.- SNP association
-	8.1.- SNP association analysis for DHA
-	8.2.- SNP association analysis for Lumefantrine
-	8.3.- SNP association analysis for Mefloquine
-	8.4.- SNP association analysis for MDAQ
-	8.5.- SNP association analysis for Chloroquine
-	8.6.- SNP association analysis for Piperaquine
-	8.7.- Manhattan plots
-	8.8.- List of associated SNP for the six drugs
-	8.9.- Confirming SNPs associated when using CRT76 and CRT356 as covariable
-	8.10.- Confirming SNPs associated when using CRT76 as covariable
-	8.11.- Confirming SNPs associated when using MDR86 as covariable
+# 7.- SNP association
+	7.1.- SNP association analysis for DHA
+	7.2.- SNP association analysis for Lumefantrine
+	7.3.- SNP association analysis for Mefloquine
+	7.4.- SNP association analysis for MDAQ
+	7.5.- SNP association analysis for Chloroquine
+	7.6.- SNP association analysis for Piperaquine
+	7.7.- Manhattan plots
+	7.8.- List of associated SNP for the six drugs
+	7.9.- Confirming SNPs associated when using CRT76 and CRT356 as covariable
+	7.10.- Confirming SNPs associated when using CRT76 as covariable
+	7.11.- Confirming SNPs associated when using MDR86 as covariable
