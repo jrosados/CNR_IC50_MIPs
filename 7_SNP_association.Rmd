@@ -1,0 +1,1145 @@
+---
+title: "Phenotype_genotype_association"
+author: 
+- name: "Jason_Rosado"
+affiliation: Institut de Recherche pour le Développement
+email: jason.rosado@ird.fr 
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    css: mystyle.css
+    number_sections: yes
+    toc: true
+    toc_float: true
+    code_folding: hide 
+    code_download: false
+    fig_width: 8
+    fig_height: 6
+    theme: cosmo
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE, 
+                      message = FALSE, 
+                      tidy = TRUE,
+                      fig.width = 8, 
+                      fig.height = 6)
+
+library(plyr)
+library(table1)
+library(tidyverse)
+library(table1)
+library(ggplot2)
+library(cowplot)
+library(grid)
+library(jtools)
+library(ggpubr)
+library(SNPassoc)
+library(calibrate)
+library(qqman)
+library(forcats)
+library(here)
+```
+
+# Loading data from Validated_mutations.Rmd ; i.e. database filtered <30% of missing data
+```{r, echo=FALSE, message=FALSE}
+glm_database_cont<- readRDS(here("intermediate_data","glm_database_cont.rds"))
+
+MIP_data_all_plates<- readRDS(here("intermediate_data","MIP_data_all_plates.rds"))
+```
+
+# Convert columns of our database to SNP objects using **SNPassoc** package 
+See <https://github.com/isglobal-brge/SNPassoc> for more information
+
+```{r, message=FALSE}
+glm_db.s <- setupSNP(data=glm_database_cont, colSNPs=2:3490, name.genotypes =c(0, 1, 2))
+
+```
+
+SNPassoc code: AA: Wild-type; AB: Mixed; BB: Mutant
+```{r, echo=FALSE,message=FALSE}
+glm_db.s[1:4, c(1:2,14:17)]
+```
+## Cleaning Monomorphic and rare mutations 
+Updating the SNPs database: Removing **monomorphic** mutations and keeping mutation with **Minor Allele Frequency >0.01 (1%)**
+```{r, echo=FALSE,message=FALSE,results='hide'}
+
+summary_mutation_table <- summary(glm_db.s[11:ncol(glm_db.s)]) %>%
+  #Selecting Minor Allele Frequency >0.01 (1%) i.e.Major allele freq <99
+  filter(major.allele.freq < 99) %>%
+  rownames_to_column() %>% 
+  mutate(mutation_type = case_when(str_detect(rowname, "del") ~ "del",
+         str_detect(rowname, "ins") ~ "ins",
+         str_detect(rowname, "fs") ~ "fs",
+         str_detect(rowname, "indel") ~ "indel",
+         str_detect(rowname, "dup") ~ "dup")) %>%
+  mutate(mutation_type = ifelse(is.na(mutation_type), "snp", mutation_type)) %>%
+  group_by(mutation_type) %>%
+  summarise(n = n())
+
+
+mutations_summary<- summary(glm_db.s[11:ncol(glm_db.s)]) %>%
+  #Selecting Minor Allele Frequency >0.01 (1%) i.e.Major allele freq <99
+  filter(major.allele.freq < 99) %>%
+  rownames_to_column() %>%
+  #Removing deletions, insertions, frameshift and duplications
+  filter(!str_detect(rowname, "del"),
+         !str_detect(rowname, "ins"),
+         !str_detect(rowname, "fs"),
+         !str_detect(rowname, "dup")) %>%
+  inner_join(MIP_data_all_plates %>% dplyr::select(mutation_name,gene, aa_change) %>% mutate(mutation_name=   str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")), by =c("rowname" = "mutation_name")) %>%
+  unique() %>%
+  mutate(position_aa = str_extract(aa_change, "[1-9][0-9]{0,3}")) %>%
+  group_by(gene) %>%
+  #Removing non biallelic SNPs
+  filter(!duplicated(position_aa)) %>%
+  ungroup() %>%
+  dplyr::select(!c(gene,aa_change, position_aa)) %>%
+  column_to_rownames()
+  
+#Selecting mutation names that passed MAF >0.01
+glm_db.s <- 
+  glm_db.s %>%
+  dplyr::select(c(1:10),
+         all_of(row.names(mutations_summary)))
+
+```
+
+## Plot missing genotype data
+We have 645 mutation names for SNPassoc analysis
+```{r, echo=FALSE, warning=FALSE}
+plot_missing<- plotMissing(glm_db.s, print.labels.SNPs = FALSE)
+```
+
+# SNP association analysis for DHA
+
+If an expected model of inheritance is hypothesized, the association analysis for the model can be specified in the argument model, which by default test all models. See this **example**
+```{r, warning=FALSE}
+#association(DHA ~ Pfubp1.Arg2226Lys, glm_db.s)
+```
+For multiple SNP data, our objective is to identify the variants that are significantly associated with the trait. The most basic strategy is, therefore, to fit an association test like the one described above for each of the SNPs in the dataset and determine which of those associations are significant. We are adjusting the association by country anb year
+
+```{r, warning=FALSE, message=FALSE}
+multilocus_asoc_dha<- WGassociation(log10(DHA) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+#head(multilocus_asoc_dha)
+```
+
+## Significant associations for DHA after Bonferroni correction 
+```{r, message=FALSE}
+bonf_DHA_conti<- Bonferroni.sig(multilocus_asoc_dha, model = "dominant")
+
+```
+```{r, echo=FALSE, message=FALSE}
+probes <- read.csv(here("raw_data", "all_haplotypes.csv")) %>%
+  dplyr::select(Gene, Chrom) %>%
+  unique() %>%
+  rename(gene = Gene,
+          chr = Chrom)
+
+SNP_sort<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(mutations_summary)) %>%
+  unique() %>%
+  mutate(position_aa = str_extract(aa_change, "[1-9][0-9]{0,3}")) %>%
+  inner_join(probes, by = "gene")
+  
+```
+
+```{r, echo=FALSE, message=FALSE}
+
+multilocus_asoc_dha_df <- as.data.frame(multilocus_asoc_dha)
+
+SNP_sort_DHA<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_dha)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_dha_df %>% mutate(SNP = row.names(multilocus_asoc_dha_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P) 
+
+#Selecting all associated SNPs
+trend_DHA_conti <- SNP_sort_DHA %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "DHA")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+
+#write.csv(trend_DHA_conti, "associated_DHA.csv", row.names = F)
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+cut_off_pvalue = 0.05/nrow(multilocus_asoc_dha)
+```
+
+## Manhattan plot function taken from qqman R package
+```{r, echo=FALSE, message=FALSE}
+manhattan <- function(x, chr="CHR", bp="BP", p="P", snp="SNP", 
+                      col=c("gray10", "gray60"), chrlabs=NULL,
+#                     suggestiveline=-log10(0.05),
+                   genomewideline=-log10(0.0001381215),                       highlight=NULL, logp=TRUE, annotatePval = NULL, annotateTop = TRUE, ...) {
+
+    # Not sure why, but package check will warn without this.
+    CHR=BP=P=index=NULL
+    
+    # Check for sensible dataset
+    ## Make sure you have chr, bp and p columns.
+    if (!(chr %in% names(x))) stop(paste("Column", chr, "not found!"))
+    if (!(bp %in% names(x))) stop(paste("Column", bp, "not found!"))
+    if (!(p %in% names(x))) stop(paste("Column", p, "not found!"))
+    ## warn if you don't have a snp column
+    if (!(snp %in% names(x))) warning(paste("No SNP column found. OK unless you're trying to highlight."))
+    ## make sure chr, bp, and p columns are numeric.
+    if (!is.numeric(x[[chr]])) stop(paste(chr, "column should be numeric. Do you have 'X', 'Y', 'MT', etc? If so change to numbers and try again."))
+    if (!is.numeric(x[[bp]])) stop(paste(bp, "column should be numeric."))
+    if (!is.numeric(x[[p]])) stop(paste(p, "column should be numeric."))
+    
+    # Create a new data.frame with columns called CHR, BP, and P.
+    # d=data.frame(CHR=x[[chr]], BP=x[[bp]], P=x[[p]], pos = NA, index = NA) # with millions of SNPs, create dataframe at once 
+	                                                         #  rather than dynamically allocated(see line 72-73, and remove line 87 and line 91 )
+    
+    # If the input data frame has a SNP column, add it to the new data frame you're creating.
+    if (!is.null(x[[snp]])) d = data.frame(CHR=x[[chr]], BP=x[[bp]], P=x[[p]], pos = NA, index = NA ,SNP=x[[snp]], stringsAsFactors = FALSE) else 
+	    d = data.frame(CHR=x[[chr]], BP=x[[bp]], P=x[[p]], pos = NA, index = NA)
+	    
+    
+    # Set positions, ticks, and labels for plotting
+    ## Sort and keep only values where is numeric.
+    #d <- subset(d[order(d$CHR, d$BP), ], (P>0 & P<=1 & is.numeric(P)))
+    #  d <- subset(d, (is.numeric(CHR) & is.numeric(BP) & is.numeric(P)))       ## unused, all three variables are numeric, line:63-65 
+    d <- d[order(d$CHR, d$BP), ]
+    #d$logp <- ifelse(logp, yes=-log10(d$P), no=d$P)
+    if (logp) {
+        d$logp <- -log10(d$P)
+    } else {
+        d$logp <- d$P
+    }
+   # d$pos=NA
+    
+    
+    # Fixes the bug where one chromosome is missing by adding a sequential index column.
+   # d$index=NA
+   # ind = 0
+   # for (i in unique(d$CHR)){
+   #     ind = ind + 1
+   #     d[d$CHR==i,]$index = ind
+   # }
+   d$index = rep.int(seq_along(unique(d$CHR)), times = tapply(d$SNP,d$CHR,length))  # replcace the for loop of line 92-96 to improve efficiency
+    
+    # This section sets up positions and ticks. Ticks should be placed in the
+    # middle of a chromosome. The a new pos column is added that keeps a running
+    # sum of the positions of each successive chromsome. For example:
+    # chr bp pos
+    # 1   1  1
+    # 1   2  2
+    # 2   1  3
+    # 2   2  4
+    # 3   1  5
+    nchr = length(unique(d$CHR))
+    if (nchr==1) { ## For a single chromosome
+        ## Uncomment the next two linex to plot single chr results in Mb
+        #options(scipen=999)
+	    #d$pos=d$BP/1e6
+        d$pos=d$BP
+      #  ticks=floor(length(d$pos))/2+1          ## unused, from code line: 169
+        xlabel = paste('Chromosome',unique(d$CHR),'position')
+      #  labs = ticks          ## unused, from code line: 169
+    } else { ## For multiple chromosomes
+        lastbase=0
+        ticks=NULL
+        for (i in unique(d$index)) {
+            if (i==1) {
+                d[d$index==i, ]$pos=d[d$index==i, ]$BP
+            } else {
+		## chromosome position maybe not start at 1, eg. 9999. So gaps may be produced. 
+		lastbase = lastbase +max(d[d$index==(i-1),"BP"])   # replace line 128
+		d[d$index == i,"BP"] = d[d$index == i,"BP"]-min(d[d$index==i,"BP"]) +1
+		d[d$index == i, "pos"] = d[d$index == i,"BP"] + lastbase    # replace line 129
+                # lastbase=lastbase+tail(subset(d,index==i-1)$BP, 1)
+                # d[d$index==i, ]$pos=d[d$index==i, ]$BP+lastbase
+		   
+            }
+            # Old way: assumes SNPs evenly distributed
+            # ticks=c(ticks, d[d$index==i, ]$pos[floor(length(d[d$index==i, ]$pos)/2)+1])
+            # New way: doesn't make that assumption
+           # ticks = c(ticks, (min(d[d$index == i,]$pos) + max(d[d$index == i,]$pos))/2 + 1)  # see line 136, to reduce the burden of for loop 
+        }
+	ticks <-tapply(d$pos,d$index,quantile,probs=0.5)   # replace line 135
+        xlabel = 'Chromosome'
+        #labs = append(unique(d$CHR),'') ## I forgot what this was here for... if seems to work, remove.
+        labs <- unique(d$CHR)
+    }
+    
+    # Initialize plot
+    xmax = ceiling(max(d$pos) * 1.03)
+    xmin = floor(max(d$pos) * -0.03)
+    
+    # The old way to initialize the plot
+    # plot(NULL, xaxt='n', bty='n', xaxs='i', yaxs='i', xlim=c(xmin,xmax), ylim=c(ymin,ymax),
+    #      xlab=xlabel, ylab=expression(-log[10](italic(p))), las=1, pch=20, ...)
+
+    
+    # The new way to initialize the plot.
+    ## See http://stackoverflow.com/q/23922130/654296
+    ## First, define your default arguments
+    def_args <- list(xaxt='n', bty='n', xaxs='i', yaxs='i', las=1, pch=20,
+                     xlim=c(xmin,xmax), ylim=c(0,ceiling(max(d$logp))),
+                     xlab=xlabel, ylab=expression(-log[10](italic(p))))
+    ## Next, get a list of ... arguments
+    #dotargs <- as.list(match.call())[-1L]
+    dotargs <- list(...)
+    ## And call the plot function passing NA, your ... arguments, and the default
+    ## arguments that were not defined in the ... arguments.
+    do.call("plot", c(NA, dotargs, def_args[!names(def_args) %in% names(dotargs)]))
+    
+    # If manually specifying chromosome labels, ensure a character vector and number of labels matches number chrs.
+    if (!is.null(chrlabs)) {
+        if (is.character(chrlabs)) {
+            if (length(chrlabs)==length(labs)) {
+                labs <- chrlabs
+            } else {
+                warning("You're trying to specify chromosome labels but the number of labels != number of chromosomes.")
+            }
+        } else {
+            warning("If you're trying to specify chromosome labels, chrlabs must be a character vector")
+        }
+    }
+    
+    # Add an axis. 
+    if (nchr==1) { #If single chromosome, ticks and labels automatic.
+        axis(1, ...)
+    } else { # if multiple chrs, use the ticks and labels you created above.
+        axis(1, at=ticks, labels=labs, ...)
+    }
+    
+    # Create a vector of alternatiting colors
+    #col=rep(col, max(d$CHR))  # replaced by line 187
+    col = rep_len(col, max(d$index))  ## mean this one?  the results are same
+
+    # Add points to the plot
+    if (nchr==1) {
+        with(d, points(pos, logp, pch=20, col=col[1], ...))
+    } else {
+        # if multiple chromosomes, need to alternate colors and increase the color index (icol) each chr.
+        icol=1
+        for (i in unique(d$index)) {
+            #with(d[d$index==unique(d$index)[i], ], points(pos, logp, col=col[icol], pch=20, ...))
+	    points(d[d$index==i,"pos"], d[d$index==i,"logp"], col=col[icol], pch=20, ...)
+            icol=icol+1
+        }
+    }
+    
+    # Add suggestive and genomewide lines
+    #if (suggestiveline) abline(h=suggestiveline, col="blue")
+    if (genomewideline) abline(h=genomewideline, col="red")
+    
+    # Highlight snps from a character vector
+    if (!is.null(highlight)) {
+        if (any(!(highlight %in% d$SNP))) warning("You're trying to highlight SNPs that don't exist in your results.")
+        d.highlight=d[which(d$SNP %in% highlight), ]
+        with(d.highlight, points(pos, logp, col="green3", pch=20, ...)) 
+    }
+    
+    # Highlight top SNPs
+    if (!is.null(annotatePval)) {
+        # extract top SNPs at given p-val
+        if (logp) {
+            topHits = subset(d, P <= annotatePval)
+        } else
+            topHits = subset(d, P >= annotatePval)
+        par(xpd = TRUE)
+        # annotate these SNPs
+        if (annotateTop == FALSE) {
+          if (logp) {
+              with(subset(d, P <= annotatePval), 
+                   textxy(pos, -log10(P), offset = 0.625, labs = topHits$SNP, cex = 0.45), ...)
+          } else
+              with(subset(d, P >= annotatePval), 
+                   textxy(pos, P, offset = 0.625, labs = topHits$SNP, cex = 0.45), ...)
+        }
+        else {
+            # could try alternative, annotate top SNP of each sig chr
+            topHits <- topHits[order(topHits$P),]
+            topSNPs <- NULL
+            
+            for (i in unique(topHits$CHR)) {
+                
+                chrSNPs <- topHits[topHits$CHR == i,]
+                topSNPs <- rbind(topSNPs, chrSNPs[1,])
+                
+            }
+            if (logp ){
+                textxy(topSNPs$pos, -log10(topSNPs$P), offset = 0.625, labs = topSNPs$SNP, cex = 0.5, ...)
+            } else
+              textxy(topSNPs$pos, topSNPs$P, offset = 0.625, labs = topSNPs$SNP, cex = 0.5, ...)
+        }
+    }  
+    par(xpd = FALSE)
+}
+```
+
+```{r, echo=FALSE}
+
+f <- function(y)
+    c(label=length(y), y=median(y))
+
+DHA_plot_continous<- glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_DHA_conti),
+  #remove NA genotypes
+         !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%
+  ggplot(aes(genotype, DHA, fill = genotype)) +
+  geom_boxplot( ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Dihydroartemisinin IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+
+print(DHA_plot_continous)
+#ggsave("DHA_plot_continous.pdf", units="cm", width=20, height=10, dpi=300)
+
+```
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+DHA_plot_continous$data %>%
+  dplyr::select(mutation_name, genotype,DHA)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+            mean = mean(DHA),
+          median = median (DHA),
+          Q1 = quantile(DHA, 0.25),
+          Q3 = quantile(DHA, 0.75)) %>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
+# SNP association analysis for Lumefantrine 
+```{r, warning=FALSE}
+multilocus_asoc_lum<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+```
+
+### Significant associations for Lumefantrine after Bonferroni correction
+```{r, message=FALSE}
+bonf_lum_conti<- Bonferroni.sig(multilocus_asoc_lum, model = "dominant") 
+
+pvalue_cutoff = 0.05/nrow(multilocus_asoc_lum)
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+
+multilocus_asoc_lum_df <- as.data.frame(multilocus_asoc_lum)
+
+SNP_sort_lum<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_lum)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_lum_df %>% mutate(SNP = row.names(multilocus_asoc_lum_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P) #%>%
+  #filter(!is.na(P))
+
+#Selecting all associated SNPs
+trend_LUM_conti <- SNP_sort_lum %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "LUM")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+
+#write.csv(trend_LUM_conti, "associated_LMF.csv", row.names = F)
+```
+
+```{r, echo=FALSE}
+lum_plot_continous<- glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_lum_conti),
+  #remove NA genotypes
+         !is.na(genotype))  %>%
+   inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%
+  ggplot(aes(genotype, Lumefantrine, fill = genotype)) +
+  geom_boxplot(#aes(colour = genotype)
+    ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Lumefantrine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+
+print(lum_plot_continous)
+#ggsave("lum_plot_continous.pdf", units="cm", width=20, height=10, dpi=300)
+ 
+```
+### Table
+
+```{r, warning=FALSE, message=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+lum_plot_continous$data %>%
+  dplyr::select(mutation_name, genotype,Lumefantrine)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (Lumefantrine),
+          Q1 = quantile(Lumefantrine, 0.25),
+          Q3 = quantile(Lumefantrine, 0.75)) %>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+
+```
+
+# SNP association analysis for Mefloquine 
+```{r, warning=FALSE}
+multilocus_asoc_meflo<- WGassociation(log10(Mefloquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE, model = "dominant", genotypingRate = 69)
+
+#head(multilocus_asoc_meflo)
+```
+
+### Significant associations for Mefloquine after Bonferroni correction
+```{r, message=FALSE}
+bonf_meflo_conti<- Bonferroni.sig(multilocus_asoc_meflo, model = "dominant")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+multilocus_asoc_meflo_df <- as.data.frame(multilocus_asoc_meflo)
+
+SNP_sort_meflo<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_meflo)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_meflo_df %>% mutate(SNP = row.names(multilocus_asoc_meflo_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P)
+
+#Selecting all associated SNPs
+trend_MFQ_conti <- SNP_sort_meflo %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "MFQ")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+```
+
+```{r, echo=FALSE}
+meflo_plot_continuous<- glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_meflo_conti),
+  #remove NA genotypes
+         !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%
+  ggplot(aes(genotype, Mefloquine, fill = genotype)) +
+  geom_boxplot( ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Mefloquine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+
+print(meflo_plot_continuous)
+#ggsave("meflo_plot_continuous.pdf", units="cm", width=5, height=5, dpi=300)
+  
+```
+
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+meflo_plot_continuous$data %>%
+  dplyr::select(mutation_name, genotype,Mefloquine)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (Mefloquine),
+          Q1 = quantile(Mefloquine, 0.25),
+          Q3 = quantile(Mefloquine, 0.75)) %>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
+
+# SNP association analysis for MDAQ 
+
+```{r, warning=FALSE}
+multilocus_asoc_MDAQ<- WGassociation(log10(MDAQ) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+#head(multilocus_asoc_MDAQ)
+```
+### Significant associations for MDAQ after Bonferroni correction
+```{r, message=FALSE}
+bonf_MDAQ_conti<- Bonferroni.sig(multilocus_asoc_MDAQ, model = "dominant")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+multilocus_asoc_MDAQ_df <- as.data.frame(multilocus_asoc_MDAQ)
+
+SNP_sort_MDAQ<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_MDAQ)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_MDAQ_df %>% mutate(SNP = row.names(multilocus_asoc_MDAQ_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P)
+
+#Selecting all associated SNPs
+trend_MDAQ_conti <- SNP_sort_MDAQ %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "MDAQ")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+
+```
+
+
+```{r, echo=FALSE}
+MDAQ_plot_continuous<-
+glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_MDAQ_conti),
+  #remove NA genotypes
+         !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%
+  ggplot(aes(genotype, MDAQ, fill = genotype)) +
+  geom_boxplot(#aes(colour = genotype)
+    ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Monodesethylamodiaquine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+
+print(MDAQ_plot_continuous)
+#ggsave("MDAQ_plot_continuous.pdf", units="cm", width=20, height = 10, dpi=300)
+  
+```
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+MDAQ_plot_continuous$data %>%
+  dplyr::select(mutation_name, genotype,MDAQ)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (MDAQ),
+          Q1 = quantile(MDAQ, 0.25),
+          Q3 = quantile(MDAQ, 0.75)) %>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
+
+# SNP association analysis for chloroquine 
+```{r, warning=FALSE}
+multilocus_asoc_chloroquine<- WGassociation(log10(chloroquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+#head(multilocus_asoc_chloroquine)
+```
+
+### Significant associations for chloroquine after Bonferroni correction
+```{r, message=FALSE}
+bonf_chloroquine_conti<- Bonferroni.sig(multilocus_asoc_chloroquine, model = "dominant")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+multilocus_asoc_chloroquine_df <- as.data.frame(multilocus_asoc_chloroquine)
+
+SNP_sort_chloroquine<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_chloroquine)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_chloroquine_df %>% mutate(SNP = row.names(multilocus_asoc_chloroquine_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P)
+
+
+#Selecting all associated SNPs
+trend_CQ <- SNP_sort_chloroquine %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "CQ")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+```
+
+```{r, echo=FALSE}
+chloroquine_plot_continous<-
+glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_chloroquine_conti),
+  #remove NA genotypes
+         !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%
+  ggplot(aes(genotype, chloroquine, fill = genotype)) +
+  geom_boxplot(#aes(colour = genotype)
+    ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Chloroquine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+
+print(chloroquine_plot_continous)
+#ggsave("chloroquine_plot_continous.pdf", units="cm", width=20, height = 10, dpi=300)
+ 
+```
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+chloroquine_plot_continous$data %>%
+  dplyr::select(mutation_name, genotype,chloroquine)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (chloroquine),
+          Q1 = quantile(chloroquine, 0.25),
+          Q3 = quantile(chloroquine, 0.75))%>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+
+```
+
+# SNP association analysis for piperaquine 
+
+```{r, warning=FALSE}
+multilocus_asoc_piperaquine<- WGassociation(log10(piperaquine) ~ country + year + median_coi, data = glm_db.s, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+#head(multilocus_asoc_piperaquine)
+```
+
+### Significant associations for piperaquine after Bonferroni correction
+```{r, message=FALSE}
+bonf_piperaquine_conti<- Bonferroni.sig(multilocus_asoc_piperaquine, model = "dominant")
+
+```
+
+```{r, echo=FALSE, message=FALSE}
+multilocus_asoc_piperaquine_df <- as.data.frame(multilocus_asoc_piperaquine)
+
+SNP_sort_piperaquine<- MIP_data_all_plates %>%
+  dplyr::select(gene_id, gene, mutation_name, aa_change) %>%
+  mutate(mutation_name = 
+  #editing mutation names to match with the bonferroni table         
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  filter(mutation_name %in% row.names(multilocus_asoc_piperaquine)) %>%
+  unique() %>%
+  mutate(position_aa = as.numeric(str_extract(aa_change, "[1-9][0-9]{0,3}"))) %>%
+  inner_join(probes, by = "gene") %>%
+  mutate(CHR = as.integer(str_extract(chr, "[1-9][0-9]{0,2}"))) %>%
+  rename(SNP = mutation_name,
+         BP =  position_aa) %>%
+  left_join(multilocus_asoc_piperaquine_df %>% mutate(SNP = row.names(multilocus_asoc_piperaquine_df)), by = "SNP") %>%
+  rename(P=dominant) %>%
+  dplyr::select(SNP, CHR, BP, P)
+
+#Selecting all associated SNPs
+trend_PPQ <- SNP_sort_piperaquine %>% 
+  filter(P<0.05) %>%
+  dplyr::select(!BP) %>%
+  mutate(SNP = str_replace_all(SNP,"[\\.]|([\\.]?=[\\.])|([\\.]?=[\\.])","-")) %>%
+  separate_wider_delim(SNP, "-", names = c("gene", "mutation"), too_many = "merge") %>%
+  mutate(drug = "PPQ")%>%
+  dplyr::select(drug, CHR, gene, mutation, P) %>%
+  arrange(P)
+
+```
+
+```{r, echo=FALSE}
+piperaquine_plot_continous<-
+glm_database_cont %>%
+  #format longer to change mutation name
+  pivot_longer(2:3490, names_to = "mutation_name", values_to = "genotype") %>%
+  mutate(mutation_name =
+  #editing mutation names to match with the bonferroni table
+  str_replace_all(mutation_name,"[\\-]|([\\-]?=[\\-])|([\\-]?=[\\_])",".")) %>%
+  #select significant mutations
+  filter(mutation_name %in% row.names(bonf_piperaquine_conti),
+  #remove NA genotypes
+         !is.na(genotype)) %>%
+  inner_join(SNP_sort, by = "mutation_name") %>%
+  mutate(genotype = as.factor(case_when(genotype == 0 ~ "Wild type",
+                              genotype == 1 | genotype == 2 ~ "Mutant")),
+         genotype = fct_relevel(genotype, c("Wild type","Mutant")),
+         position_aa =  as.numeric(position_aa)) %>%                            ggplot(aes(genotype, piperaquine, fill = genotype)) +
+  geom_boxplot(#aes(colour = genotype)
+    ) + scale_fill_brewer(palette="Set2") +
+  stat_compare_means(aes(group = genotype), label = "p.format", size = 2) +
+  stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)+
+  scale_y_log10() + ylab("Chloroquine IC50(nM)")+
+  facet_grid(~fct_reorder(mutation_name, position_aa, .desc = FALSE)) + theme_classic()+
+  theme(axis.text.x = element_text(angle=0, vjust=0.5),
+        legend.position ="none")
+ 
+print(piperaquine_plot_continous)
+```
+
+### Table
+```{r, warning=FALSE, echo=FALSE}
+
+caption  <- "Polymorphism associated with IC50"
+
+piperaquine_plot_continous$data %>%
+  dplyr::select(mutation_name, genotype,piperaquine)%>%
+  group_by(mutation_name, genotype) %>%
+  summarise(n.ind = n(),
+          median = median (piperaquine),
+          Q1 = quantile(piperaquine, 0.25),
+          Q3 = quantile(piperaquine, 0.75))%>%
+  DT::datatable(
+    extensions = 'Buttons',
+    options = list(dom = 'Bfrtip',
+                   buttons = c('excel', 'csv'))
+  )
+
+```
+# Manhattan plots
+```{r, echo=FALSE, message=FALSE}
+
+pdf("figures/Manhattan_plot.pdf", width=8, height=7)
+par(mfrow = c(3, 2))
+
+#par(oma=c(5,7,1,1))
+
+manhattan(SNP_sort_DHA, main = "Dihydroartemisinin", ylim = c(0, 10),
+                           col = c("blue4", "orange3"))
+manhattan(SNP_sort_lum, main = "Lumefantrine", ylim = c(0, 10),
+                           col = c("blue4", "orange3"))
+manhattan(SNP_sort_MDAQ, main = "Monodesethylamodiaquine", ylim = c(0, 10),
+                           col = c("blue4", "orange3"))
+manhattan(SNP_sort_meflo, main = "Mefloquine", ylim = c(0, 10),
+                           col = c("blue4", "orange3"))
+manhattan(SNP_sort_chloroquine, main = "Chloroquine", ylim = c(0, 62),
+                           col = c("blue4", "orange3"))
+manhattan(SNP_sort_piperaquine, main = "Piperaquine", ylim = c(0, 10),
+                           col = c("blue4", "orange3"))
+dev.off()
+
+```
+
+# List of associated SNP for the six drugs
+```{r}
+list_SNPs_associated<- rbind(trend_DHA_conti, trend_LUM_conti,
+                             trend_MFQ_conti, trend_MDAQ_conti,
+                             trend_CQ, trend_PPQ)
+
+write.csv(list_SNPs_associated, "tables/list_SNPs_associated.csv", row.names = F)
+```
+
+
+# Confirming SNPs associated when using CRT76 and CRT356 as covariable
+
+## Create a covariate that includes CRT76 and CRT356
+```{r}
+CRT_haplotypes<- glm_database_cont%>%
+  dplyr::select(sample,`crt-Lys76Thr`, `crt-Ile356Thr`) 
+```
+
+## Deleting CRT76 and CRT356 from database
+```{r}
+
+glm_db_withoutCRT76_356<- glm_db.s%>%
+  dplyr::select(!c(crt.Lys76Thr, crt.Ile356Thr))
+
+#We add the CRT haplotype as covariate to the database without CRT76 and CRT 356
+
+glm_db_withoutCRT76_356<- glm_db_withoutCRT76_356 %>%
+  left_join(CRT_haplotypes, by = "sample")
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+DHA_crt76_crt356<- WGassociation(log10(DHA) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+lum_crt76_crt356<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+meflo_crt76_crt356<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+MDAQ_crt76_crt356<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+chloroquine_crt76_crt356<- WGassociation(log10(chloroquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+piperaquine_crt76_crt356<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `crt-Lys76Thr` + `crt-Ile356Thr`
+                      , data = glm_db_withoutCRT76_356, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+```
+
+### Significant associations for Lumefantrine after Bonferroni correction
+```{r, message=FALSE}
+
+bonf_DHA_crt76_crt356<- Bonferroni.sig(DHA_crt76_crt356, model = "dominant")
+
+bonf_lum_crt76_crt356<- Bonferroni.sig(lum_crt76_crt356, model = "dominant") 
+
+bonf_meflo_crt76_crt356<- Bonferroni.sig(meflo_crt76_crt356, model = "dominant") 
+
+bonf_MDAQ_crt76_crt356<- Bonferroni.sig(MDAQ_crt76_crt356, model = "dominant") 
+
+bonf_chloroquine_crt76_crt356<- Bonferroni.sig(chloroquine_crt76_crt356, model = "dominant") 
+
+bonf_piperaquine_crt76_crt356<- Bonferroni.sig(piperaquine_crt76_crt356, model = "dominant") 
+
+```
+
+# Confirming SNPs associated when using CRT76 as covariable
+
+## Create a covariate that includes CRT76 only
+```{r}
+CRT_haplotypes_C76_cov<- glm_database_cont%>%
+  dplyr::select(sample,`crt-Lys76Thr`) 
+```
+
+## Deleting CRT76 from database
+```{r}
+
+glm_db_withoutCRT76<- glm_db.s%>%
+  dplyr::select(!c(crt.Lys76Thr))
+
+#We add the CRT haplotype as covariate to the database without CRT76 
+
+glm_db_withoutCRT76<- glm_db_withoutCRT76 %>%
+  left_join(CRT_haplotypes_C76_cov, by = "sample")
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+DHA_crt76<- WGassociation(log10(DHA) ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+lum_crt76<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+meflo_crt76<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+MDAQ_crt76<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+chloroquine_crt76<- WGassociation(chloroquine ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+piperaquine_crt76<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `crt-Lys76Thr` 
+                      , data = glm_db_withoutCRT76, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+```
+
+### Significant associations after Bonferroni correction deleting crt76
+```{r, message=FALSE}
+
+bonf_DHA_crt76<- Bonferroni.sig(DHA_crt76, model = "dominant")
+
+bonf_lum_crt76<- Bonferroni.sig(lum_crt76, model = "dominant") 
+
+bonf_meflo_crt76<- Bonferroni.sig(meflo_crt76, model = "dominant") 
+
+bonf_MDAQ_crt76<- Bonferroni.sig(MDAQ_crt76, model = "dominant") 
+
+bonf_chloroquine_crt76<- Bonferroni.sig(chloroquine_crt76, model = "dominant") 
+
+bonf_piperaquine_crt76<- Bonferroni.sig(piperaquine_crt76, model = "dominant") 
+
+```
+
+# Confirming SNPs associated when using MDR86 as covariable
+
+## Create a covariate that includes MDR86 only
+```{r}
+MDR186_haplotypes_MDR186_cov<- glm_database_cont%>%
+  dplyr::select(sample,`mdr1-Asn86Tyr`) 
+```
+
+## Deleting MDR1_N86 from database
+```{r}
+
+glm_db_withoutMDR86<- glm_db.s%>%
+  dplyr::select(!c(mdr1.Asn86Tyr))
+
+#We add the CRT haplotype as covariate to the database without MDR86 
+
+glm_db_withoutMDR86<- glm_db_withoutMDR86 %>%
+  left_join(MDR186_haplotypes_MDR186_cov, by = "sample")
+
+```
+
+```{r, warning=FALSE, message=FALSE}
+
+DHA_mdr1_86<- WGassociation(log10(DHA) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+lum_mdr1_86<- WGassociation(log10(Lumefantrine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+meflo_mdr1_86<- WGassociation(log10(Mefloquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+MDAQ_mdr1_86<- WGassociation(log10(MDAQ) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+chloroquine_mdr1_86<- WGassociation(log10(chloroquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+piperaquine_mdr1_86<- WGassociation(log10(piperaquine) ~ country + year + median_coi + `mdr1-Asn86Tyr` 
+                      , data = glm_db_withoutMDR86, quantitative = TRUE,model = "dominant", genotypingRate = 69)
+
+```
+
+### Significant associations after Bonferroni correction deleting MDR1_N86
+```{r, message=FALSE}
+
+bonf_DHA_mdr1_86<- Bonferroni.sig(DHA_mdr1_86, model = "dominant")
+
+bonf_lum_mdr1_86<- Bonferroni.sig(lum_mdr1_86, model = "dominant") 
+
+bonf_meflo_mdr1_86<- Bonferroni.sig(meflo_mdr1_86, model = "dominant") 
+
+bonf_MDAQ_mdr1_86<- Bonferroni.sig(MDAQ_mdr1_86, model = "dominant") 
+
+bonf_chloroquine_mdr1_86<- Bonferroni.sig(chloroquine_mdr1_86, model = "dominant") 
+
+bonf_piperaquine_mdr1_86<- Bonferroni.sig(piperaquine_mdr1_86, model = "dominant") 
+
+```
+
+```{r echo=F, eval=F}
+save.image("./intermediate_data/SNP_association.RData")
+```
