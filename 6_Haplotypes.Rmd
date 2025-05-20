@@ -671,11 +671,11 @@ CRT_MDR1_haplotypes_associa<- glm_database_cont_hap%>%
 ```{r,echo=FALSE, message=FALSE, warning=FALSE}
 haplotype_CRT_MDR1_trend_time<- CRT_MDR1_haplotypes_associa %>%
    rowwise() %>%
-  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
-         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
+  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "crt Lys76", "crt 76Thr"),
+         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"mdr1 Asn86","mdr1 86Tyr")
          ) %>%
   rowwise() %>%
-  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
+  unite("haplotype",10:ncol(.),sep =" - ", remove = F) %>%
     mutate(year = as.character(year),
   year = case_when(year=="2020" ~ "2020-21", 
                           year=="2021"  ~ "2020-21", 
@@ -710,76 +710,216 @@ ggsave("figures/CRT_MDR1_haplotypes_trend_time.pdf", units="cm", width=19, heigh
 
 ```
 
-# Grouped frequency of CRT_MDR1 haplotypes before and after 2019
-```{r,echo=FALSE, message=FALSE, warning=FALSE}
-haplotype_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
+```{r}
+
+haplotype_CRT_MDR1<- CRT_MDR1_haplotypes_associa %>%
    rowwise() %>%
-  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
-         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
+  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "crt_Lys76", "crt_76Thr"),
+         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"mdr1_Asn86","mdr1_86Tyr")
          ) %>%
   rowwise() %>%
-  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
-  mutate( year = ifelse(year<=2018, "2016-18","2019-23")) %>% 
-  group_by(year,haplotype) %>%
-  #create new variables to count the total number of genotyped samples, the ones that are mutant and the frequency
-  summarise(n = n()) %>%
-  mutate( frequency = num((n/sum(n)),digits = 2) ,
-         m = (qbinom(0.5, size=sum(n), prob=frequency))/sum(n),
-         lim_inf = (qbinom( 0.025, size=sum(n), prob=frequency))/sum(n),
-         lim_sup = (qbinom( 0.975, size=sum(n), prob=frequency))/sum(n)) %>%
-  unique() %>%
-  mutate(haplotype = factor(haplotype,
-                           levels=c("Pfcrt-76T | Pfmdr1-86Y","Pfcrt-76T | Pfmdr1-N86","Pfcrt-K76 | Pfmdr1-86Y", "Pfcrt-K76 | Pfmdr1-N86"),
-                           labels = c("crt 76Thr - mdr186Tyr","crt 76Thr - mdr1 Asn86","crt Lys76 - mdr1 86Tyr","crt Lys76 - mdr1 Asn86"))) %>%
- ggplot(aes(year, frequency, colour = haplotype, fill = haplotype)) +
-  geom_bar( stat = "identity", color = "black") +
-  ylab("Frequency (%)") + xlab("Year") + theme_classic() +
-  scale_fill_brewer(palette = "Set1") +
-  scale_y_continuous(breaks = c(0, 0.25, 0.5,0.75, 1), labels = c(0, 25, 50, 75, 100)) +
-  theme(plot.title = element_text(hjust = 0.5),
-        axis.title= element_text(size = 15),
-        axis.text.x = element_text(angle=0, vjust=0.5, size = 15),
-        axis.text.y = element_text(angle=0, vjust=0.5, size = 15))
+  unite("haplotype",10:ncol(.),sep =" _ ", remove = F)
+
+# Step 1: Ensure data is ordered by year
+haplotype_CRT_MDR1_ordered <- haplotype_CRT_MDR1[order(haplotype_CRT_MDR1$year), ]
+
+#write.csv(haplotype_CRT_MDR1_ordered, "haplotype_CRT_MDR1_ordered.csv", row.names = F)
+
+library(DescTools) # For CochranArmitageTest
+
+data = haplotype_CRT_MDR1_ordered
+
+# Step 1: Prepare and clean the haplotype data
+haplo_data <- data %>%
+  mutate(
+    year = as.numeric(year),
+    haplotype = gsub(" ", "_", haplotype) # Standardize haplotype names
+  ) %>%
+  # Remove any rows with missing haplotype information
+  filter(!is.na(haplotype)) %>%
+  # Count haplotype occurrences per year
+  count(year, haplotype) %>%
+  # Complete the dataset with zero counts for missing year-haplotype combinations
+  complete(year, haplotype, fill = list(n = 0)) %>%
+  # Calculate total samples per year
+  group_by(year) %>%
+  mutate(total = sum(n)) %>%
+  ungroup() %>%
+  # Calculate proportions
+  mutate(proportion = n/total)
+
+# Get the unique haplotypes present in the data
+haplotypes <- unique(haplo_data$haplotype)
+
+# Step 2: Function to test haplotype trends with proper error handling
+test_haplotype_trend <- function(haplo_name, data) {
+  # Filter data for the specific haplotype
+  haplo_df <- data %>% 
+    filter(haplotype == haplo_name)
+  
+  # Create results list
+  results <- list(
+    haplotype = haplo_name,
+    counts = setNames(haplo_df$n, haplo_df$year),
+    proportions = setNames(haplo_df$proportion, haplo_df$year),
+    Z = NA,
+    p_value = NA,
+    trend = "No trend",
+    message = NA
+  )
+  
+  # Only attempt logistic regression if there's variation
+  if(sum(haplo_df$n) > 0 && length(unique(haplo_df$n)) > 1) {
+    tryCatch({
+      # Create full dataset for modeling (1 row per sample)
+      model_df <- data %>%
+        filter(!is.na(haplotype)) %>%
+        mutate(
+          present = as.numeric(haplotype == haplo_name),
+          year_num = as.numeric(year)
+        )
+      
+      fit <- glm(
+        present ~ year_num,
+        data = model_df,
+        family = binomial
+      )
+      
+      sum_fit <- summary(fit)
+      results$Z <- sum_fit$coefficients[2, "z value"]
+      results$p_value <- sum_fit$coefficients[2, "Pr(>|z|)"]
+      results$trend <- ifelse(results$Z > 0, "Increasing", "Decreasing")
+    }, error = function(e) {
+      results$message <- paste("Model error:", e$message)
+    })
+  } else {
+    results$message <- "Insufficient variation for trend analysis"
+  }
+  
+  return(results)
+}
+
+# Step 3: Analyze all haplotypes and save results
+file_conn <- file("haplotype_trend_results.txt", open = "wt")
+writeLines("=== Haplotype Trend Analysis ===", file_conn)
+writeLines(paste("Date:", format(Sys.Date(), "%Y-%m-%d")), file_conn)
+writeLines(paste("Total samples:", nrow(data)), file_conn)
+writeLines("", file_conn)
+
+results <- lapply(haplotypes, function(h) {
+  res <- test_haplotype_trend(h, haplo_data)
+  
+  writeLines(paste("\n=== Haplotype:", res$haplotype, "==="), file_conn)
+  writeLines("Counts by year:", file_conn)
+  writeLines(capture.output(print(res$counts)), file_conn)
+  writeLines("\nProportions by year:", file_conn)
+  writeLines(capture.output(print(res$proportions)), file_conn)
+  
+  if(!is.na(res$Z)) {
+    writeLines(sprintf("\nZ-score: %.3f (%s)", res$Z, res$trend), file_conn)
+    writeLines(sprintf("p-value: %.4f", res$p_value), file_conn)
+    writeLines(paste("Interpretation:", 
+                    ifelse(res$p_value < 0.05, 
+                           paste("Significant", tolower(res$trend), "trend (p < 0.05)"),
+                           "No significant trend (p > 0.05)"))
+              , file_conn)
+  }
+  
+  if(!is.null(res$message)) {
+    writeLines(paste("\nNote:", res$message), file_conn)
+  }
+  
+  return(res)
+})
+
+close(file_conn)
+
+# First, ensure any existing graphics devices are closed
+while (!is.null(dev.list())) {
+  dev.off()
+}
 
 
-print(haplotype_CRT_MDR1_before2019_after2019)
-ggsave("figures/CRT_MDR1_haplotypes_grouped.pdf", units="cm", width=13, height=9, dpi=300)
+# Step 4: Revised Plotting Section with Robust Device Handlin
 
+# Create a temporary variable to track if we created any plots
+plots_created <- FALSE
+
+# Open PDF device only if we have data to plot
+pdf("haplotype_trend_plots.pdf", width = 8, height = 5)
+plots_created <- TRUE
+
+for (res in results) {
+  if(sum(res$counts) > 0) {  # Only plot if haplotype appears at least once
+    plot_data <- data.frame(
+      year = as.numeric(names(res$proportions)),
+      proportion = as.numeric(res$proportions)
+    )
+    
+    p <- ggplot(plot_data, aes(x = year, y = proportion)) +
+      geom_line(color = "steelblue", linewidth = 1) +
+      geom_point(size = 3, color = ifelse(res$trend == "Increasing", "firebrick", "darkgreen")) +
+      labs(
+        title = paste("Trend for", res$haplotype),
+        subtitle = ifelse(!is.na(res$Z),
+                         sprintf("Z = %.2f, p = %.3f (%s)", res$Z, res$p_value, res$trend),
+                         ifelse(!is.null(res$message), res$message, "No trend calculated")),
+        x = "Year", y = "Proportion"
+      ) +
+      theme_minimal() +
+      scale_x_continuous(breaks = unique(plot_data$year)) +
+      scale_y_continuous(limits = c(0, 1))
+    
+    print(p)
+  }
+}
+
+# Only try to close device if we opened it
+if (plots_created) {
+  dev.off()
+  cat("- Plots successfully saved to haplotype_trend_plots.pdf\n")
+} else {
+  cat("- No plots were created (no valid haplotype data)\n")
+}
+
+# Alternative approach if PDF still fails - use PNG files per plot
+if (!file.exists("haplotype_trend_plots.pdf") || file.size("haplotype_trend_plots.pdf") == 0) {
+  cat("\nTrying alternative PNG output...\n")
+  
+  for (res in results) {
+    if(sum(res$counts) > 0) {
+      plot_data <- data.frame(
+        year = as.numeric(names(res$proportions)),
+        proportion = as.numeric(res$proportions)
+      )
+      
+      p <- ggplot(plot_data, aes(x = year, y = proportion)) +
+        geom_line(color = "steelblue", linewidth = 1) +
+        geom_point(size = 3, color = ifelse(res$trend == "Increasing", "firebrick", "darkgreen")) +
+        labs(
+          title = paste("Trend for", res$haplotype),
+          subtitle = ifelse(!is.na(res$Z),
+                           sprintf("Z = %.2f, p = %.3f (%s)", res$Z, res$p_value, res$trend),
+                           ifelse(!is.null(res$message), res$message, "No trend calculated")),
+          x = "Year", y = "Proportion"
+        ) +
+        theme_minimal() +
+        scale_x_continuous(breaks = unique(plot_data$year)) +
+        scale_y_continuous(limits = c(0, 1))
+      
+      # Save as individual PNG files
+      filename <- paste0("haplotype_trend_", gsub("[^[:alnum:]]", "_", res$haplotype), ".png")
+      ggsave(filename, plot = p, width = 8, height = 5, units = "in")
+      cat("- Created", filename, "\n")
+    }
+  }
+}
+
+# Print confirmation
+cat("Analysis complete!\n")
+cat("- Results saved to 'haplotype_trend_results.txt'\n")
+cat("- Plots saved to 'haplotype_trend_plots.pdf'\n")
 ```
-## Stats of frequency CRT_MDR1 haplotypes before and after 2019
-```{r,echo=FALSE, message=FALSE, warning=FALSE}
-stats_hap_CRT_MDR1_before2019_after2019<- CRT_MDR1_haplotypes_associa %>%
-   rowwise() %>%
-  mutate(`crt-Lys76Thr` = ifelse(`crt-Lys76Thr`==0, "Pfcrt-K76", "Pfcrt-76T"),
-         `mdr1-Asn86Tyr` = ifelse(`mdr1-Asn86Tyr`==0,"Pfmdr1-N86","Pfmdr1-86Y")
-         ) %>%
-  rowwise() %>%
-  unite("haplotype",10:ncol(.),sep =" | ", remove = F) %>%
-  mutate( year = ifelse(year<=2018, "2016-18","2019-23")) %>% 
-  group_by(year,haplotype) 
-
-
-table(stats_hap_CRT_MDR1_before2019_after2019$haplotype,stats_hap_CRT_MDR1_before2019_after2019$year)
-
-chisq.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype,
-           stats_hap_CRT_MDR1_before2019_after2019$year)$expected
-
-fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype,
-           stats_hap_CRT_MDR1_before2019_after2019$year)
-
-fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-K76 | Pfmdr1-N86",
-           stats_hap_CRT_MDR1_before2019_after2019$year)
-
-fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-K76 | Pfmdr1-86Y",
-           stats_hap_CRT_MDR1_before2019_after2019$year)
-
-fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-76T | Pfmdr1-N86",
-           stats_hap_CRT_MDR1_before2019_after2019$year)
-
-fisher.test(stats_hap_CRT_MDR1_before2019_after2019$haplotype=="Pfcrt-76T | Pfmdr1-86Y",
-           stats_hap_CRT_MDR1_before2019_after2019$year)
-```
-
 ## Stats of IC50 for six drugs of CRT_MDR1 haplotypes 
 ```{r,echo=FALSE, message=FALSE, warning=FALSE}
 stats_hap_MDR_CRT<- CRT_MDR1_haplotypes_associa %>%
@@ -951,7 +1091,7 @@ ggsave("figures/upset_plot_CRT_MDR1_MFQ_LMF_DHA.pdf", device = cairo_pdf, units=
 
 data <- CRT_MDR1_haplotypes_associa
 
-#remove lines acking genotype data for CRT and MDR1
+#remove lines lacking genotype data for CRT and MDR1
 data <- data[!is.na(data$`crt-Lys76Thr`), ]
 data <- data[!is.na(data$`mdr1-Asn86Tyr`), ]
 
@@ -983,23 +1123,199 @@ for(i in 1:nrow(data)){
 data = data[data$combine %in% c("all_WT", "CRT", "MDR", "MDR_CRT"),]
 data$combine <- as.factor(data$combine)  
 
+```
+
+##Linear regression LMF
+```{r}
 ##################
 # Lumefantrine   #
 #                #
 ##################
 
 #regression model
-model_LMF <- lm(as.formula(paste("Lumefantrine", "~ year + combine")), data = data)
+model_LMF <- lm(as.formula(paste("log10(Lumefantrine)", "~ year + combine")), data = data)
 summary(model_LMF)
 
+
+AIC(model_LMF)
+
+model_LMF_year <- lm(as.formula(paste("log10(Lumefantrine)", "~ year")), data = data)
+summary(model_LMF_year)
+
+
+AIC(model_LMF_year)
+
+#Check regression residuals
+# Diagnostic plots
+par(mfrow = c(2, 2))  # Arrange 4 plots in 2x2 grid
+plot(model_LMF)
+
+#Test for autocorrelation
+library(lmtest)
+dwtest(model_LMF)  # Durbin-Watson test (p < 0.05 suggests autocorrelation)
+
+#Test for normality
+shapiro.test(residuals(model_LMF))  # p < 0.05 → non-normal residuals
+
+```
+
+##Linear regression MDAQ
+```{r}
 #################
 # MDAQ          #
 #################
 
 #regression model
-model_MDAQ <- lm(as.formula(paste("MDAQ", "~ year + combine")), data = data)
+model_MDAQ <- lm(as.formula(paste("log10(MDAQ)", "~ year + combine")), data = data)
 summary(model_MDAQ)
 
+AIC(model_MDAQ)
+
+
+model_MDAQ_year <- lm(as.formula(paste("log10(MDAQ)", "~ year")), data = data)
+summary(model_MDAQ_year)
+
+AIC(model_MDAQ_year)
+
+#Check regression residuals
+# Diagnostic plots
+par(mfrow = c(2, 2))  # Arrange 4 plots in 2x2 grid
+plot(model_MDAQ_year)
+
+#Test for autocorrelation
+library(lmtest)
+dwtest(model_MDAQ)  # Durbin-Watson test (p < 0.05 suggests autocorrelation)
+
+#Test for normality
+shapiro.test(residuals(model_MDAQ))  # p < 0.05 → non-normal residuals
+
+```
+
+##Linear regression MFQ
+```{r}
+#################
+# MFQ           #
+#################
+
+#regression model
+model_MFQ <- lm(as.formula(paste("log10(Mefloquine)", "~ year + combine")), data = data)
+summary(model_MFQ)
+
+AIC(model_MFQ)
+
+#Check regression residuals
+# Diagnostic plots
+par(mfrow = c(2, 2))  # Arrange 4 plots in 2x2 grid
+plot(model_MFQ)
+
+#Test for autocorrelation
+library(lmtest)
+dwtest(model_MFQ_year)  # Durbin-Watson test (p < 0.05 suggests autocorrelation)
+
+#Test for normality
+shapiro.test(residuals(model_MFQ_year))  # p < 0.05 → non-normal residuals
+
+model_MFQ_year <- lm(as.formula(paste("log10(Mefloquine)", "~ year")), data = data)
+summary(model_MFQ_year)
+
+AIC(model_MFQ_year)
+```
+
+##Linear regression DHA
+```{r}
+#################
+# DHA           #
+#################
+
+#regression model
+model_DHA <- lm(as.formula(paste("log10(DHA)", "~ year + combine")), data = data)
+summary(model_DHA)
+
+AIC(model_DHA)
+
+#Check regression residuals
+# Diagnostic plots
+par(mfrow = c(2, 2))  # Arrange 4 plots in 2x2 grid
+plot(model_DHA)
+
+#Test for autocorrelation
+library(lmtest)
+dwtest(model_DHA_year)  # Durbin-Watson test (p < 0.05 suggests autocorrelation)
+
+#Test for normality
+shapiro.test(residuals(model_DHA_year))  # p < 0.05 → non-normal residuals
+
+model_DHA_year <- lm(as.formula(paste("log10(DHA)", "~ year")), data = data)
+summary(model_DHA_year)
+
+AIC(model_DHA_year)
+```
+
+##Linear regression PPQ
+```{r}
+
+#################
+# Piperaquine   #
+#################
+
+#regression model
+model_PPQ <- lm(as.formula(paste("log10(piperaquine)", "~ year + combine")), data = data)
+summary(model_PPQ)
+
+AIC(model_PPQ)
+
+#Check regression residuals
+# Diagnostic plots
+par(mfrow = c(2, 2))  # Arrange 4 plots in 2x2 grid
+plot(model_PPQ)
+
+#Test for autocorrelation
+library(lmtest)
+dwtest(model_PPQ)  # Durbin-Watson test (p < 0.05 suggests autocorrelation)
+
+#Test for normality
+shapiro.test(residuals(model_PPQ))  # p < 0.05 → non-normal residuals
+
+model_PPQ_year <- lm(as.formula(paste("log10(piperaquine)", "~ year")), data = data)
+summary(model_PPQ_year)
+
+AIC(model_PPQ_year)
+```
+
+```{r}
+# Plot with linear trend + LOESS smooth
+ggplot(CRT_MDR1_haplotypes_associa, aes(x = year, y = Lumefantrine)) +
+  geom_point() +                          # Scatter plot
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linetype = "dashed") +  # Linear regression
+  geom_smooth(method = "loess", se = TRUE, color = "red", span = 0.75) +       # LOESS smooth
+  labs(title = "Time Trend with Linear vs. LOESS Fit",
+       x = "Year",
+       y = "Lumefantrine") +
+  theme_minimal()
+```
+
+```{r}
+# Plot with linear trend + LOESS smooth
+ggplot(CRT_MDR1_haplotypes_associa, aes(x = year, y = log10(MDAQ))) +
+  geom_point() +                          # Scatter plot
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linetype = "dashed") +  # Linear regression
+  geom_smooth(method = "loess", se = TRUE, color = "red", span = 0.75) +       # LOESS smooth
+  labs(title = "Time Trend with Linear vs. LOESS Fit",
+       x = "Year",
+       y = "MDAQ") +
+  theme_minimal()
+```
+
+```{r}
+# Plot with linear trend + LOESS smooth
+ggplot(CRT_MDR1_haplotypes_associa, aes(x = year, y = Mefloquine)) +
+  geom_point() +                          # Scatter plot
+  geom_smooth(method = "lm", se = TRUE, color = "blue", linetype = "dashed") +  # Linear regression
+  geom_smooth(method = "loess", se = TRUE, color = "red", span = 0.75) +       # LOESS smooth
+  labs(title = "Time Trend with Linear vs. LOESS Fit",
+       x = "Year",
+       y = "Mefloquine") +
+  theme_minimal()
 ```
 
 ```{r echo=F, eval=F}
