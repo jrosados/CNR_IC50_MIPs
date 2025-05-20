@@ -488,10 +488,10 @@ write.csv(key_genotype_subset_raw_country_table, "tables/key_genotype_subset_raw
 mutations_trend_time<- IC50_genotype_subset %>%
       filter(mutation == "Lys76Thr" |mutation == "Ala437Gly" | mutation == "Cys59Arg" |
                              mutation == "Asn86Tyr") %>%
-  mutate(mutation = case_when(mutation =="Lys76Thr" ~ "Pfcrt (K76T)",
-                              mutation =="Ala437Gly" ~ "Pfdhps (A437G)",
-                              mutation =="Cys59Arg" ~ "Pfdhfr-ts (C59R)",
-                              mutation == "Asn86Tyr" ~ "Pfmdr1 (N86Y)")) %>%
+  mutate(mutation = case_when(mutation =="Lys76Thr" ~ "crt-Lys76Thr",
+                              mutation =="Ala437Gly" ~ "dhps-Ala437Gly",
+                              mutation =="Cys59Arg" ~ "dhfr-Cys59Arg",
+                              mutation == "Asn86Tyr" ~ "mdr1-Asn86Tyr")) %>%
   mutate(year = as.character(year),
   year = case_when(year=="2020" ~ "2020-21", 
                           year=="2021"  ~ "2020-21", 
@@ -524,6 +524,103 @@ print(mutations_trend_time)
 ggsave("figures/mutations_trend_time.pdf", units="cm", width=19, height=14, dpi=300)
 
 ```
+## Calculate Kendall's tau (aggregate data) for genotype prevalence
+```{r}
+
+# Step 1: Ensure data is ordered by year
+IC50_genotype_ordered <- IC50_genotype_subset[order(IC50_genotype_subset$year), ]
+
+
+
+library(DescTools) # For CochranArmitageTest
+
+data = IC50_genotype_ordered
+
+# Function to test trend and ensure Z-sign matches observed direction
+test_mutation_trend <- function(mutation_name) {
+  # Filter data and ensure years are ordered
+  df <- data %>% 
+    filter(mutation == mutation_name) %>%
+    mutate(year = factor(year, levels = sort(unique(year))))
+  
+  # Create contingency table (rows = years, cols = genotype counts)
+  # KEY FIX: Ensure column 1 = genotype==0 (reference), column 2 = genotype==1 (mutant)
+  tab <- table(df$year, df$genotype)
+  
+  # If genotype==1 is the mutant and its frequency is decreasing, 
+  # we expect Z < 0. If not, swap columns.
+  prop <- prop.table(tab, margin = 1)[, "1"]
+  spearman_cor <- cor(as.numeric(names(prop)), prop, method = "spearman")
+  
+  # If Spearman indicates decreasing trend but Z > 0, reverse table columns
+  if (spearman_cor < 0 && CochranArmitageTest(tab)$statistic > 0) {
+    tab <- tab[, c(2, 1)]  # Swap columns
+    cat("Note: Swapped genotype columns to align Z-sign with observed trend.\n")
+  }
+  
+  # Re-run test
+  test <- CochranArmitageTest(tab)
+  prop <- prop.table(tab, margin = 1)[, "1"]  # Recalculate proportions after swap
+  
+  # Return results
+  list(
+    mutation = mutation_name,
+    table = tab,
+    proportion = prop,
+    Z = test$statistic,
+    p_value = test$p.value,
+    trend = ifelse(test$statistic > 0, "Increasing", "Decreasing")
+  )
+}
+
+# Test mutations
+mutations_to_test <- c("Lys76Thr", "Asn86Tyr", "Ala437Gly", "Cys59Arg", "Tyr184Phe")
+
+
+# Perform tests for all mutations
+results <- lapply(mutations_to_test, test_mutation_trend)
+names(results) <- mutations
+
+# Print results
+for (mutation in mutations_to_test) {
+  cat("\n=== Results for mutation:", mutation, "===\n")
+  cat("Contingency Table (Reference|Mutant):\n") 
+  print(results[[mutation]]$table)
+  cat("p-value:", results[[mutation]]$p_value, "\n")
+  print(results[[mutation]]$proportion)
+  cat("\nProportion (Mutant):\n")
+  print(results[[mutation]]$proportion)
+  cat(sprintf("\nZ-score: %.3f (%s)", results[[mutation]]$Z, results[[mutation]]$trend))
+  cat(sprintf("\np-value: %.4f", results[[mutation]]$p_value))
+  # Interpretation
+  if (results[[mutation]]$p_value < 0.05) {
+    cat("CONCLUSION: Significant trend over time (p < 0.05)\n")
+  } else {
+    cat("CONCLUSION: No significant trend over time (p > 0.05)\n")
+  }
+}
+
+# Optional: Save results to a file
+sink("mutation_trend_test_results.txt")
+for (mutation in mutations_to_test) {
+  cat("\n=== Results for mutation:", mutation, "===\n")
+  cat("Contingency Table (Reference|Mutant):\n") 
+  print(results[[mutation]]$table)
+  cat("p-value:", results[[mutation]]$p_value, "\n")
+  print(results[[mutation]]$proportion)
+  cat("\nProportion (Mutant):\n")
+  print(results[[mutation]]$proportion)
+  cat(sprintf("\nZ-score: %.3f (%s)", results[[mutation]]$Z, results[[mutation]]$trend))
+  cat(sprintf("\np-value: %.4f", results[[mutation]]$p_value))
+  cat(" Conclusion:", ifelse(results[[mutation]]$p_value < 0.05, 
+                           "Significant trend over time", 
+                           "No significant trend over time"), "\n")
+}
+sink()
+
+```
+
+
 # Frequency of key resistance mutations by year and by country
 ```{r}
 mutations_trend_time_top_ten_countries<- IC50_genotype_subset %>%
