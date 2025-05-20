@@ -272,15 +272,7 @@ PPQ_trend<-c(18.0,19.6, 16.1, 19.1, 25.4, 19.5)
 mk_result_PPQ <- mk.test(PPQ_trend)
 ```
 
-# IC50 data stratified into 2016-17 vs 2018-23 periods
-```{r}
-IC50_before2017_after2017 <- IC50_genotype %>%
-  dplyr::select(year, DHA, Lumefantrine, Mefloquine, MDAQ, chloroquine,piperaquine) %>%
-  mutate( year = ifelse(year<=2017, "2016-17","2018-23"))
-
-```
-
-## Distribution of resistant isolates in 2016-17 versus 2018-23
+## Distribution of resistant isolates in 2016-2023
 -Pascual- Aurélie- Marilyn Madamet- Sébastien Briolant- Tiphaine Gaillard- Rémy Amalvict- Nicolas Benoit- Dominique Travers- Bruno Pradines- and French National Reference Centre for Imported Malaria Study Group. 2015. “Multinormal in Vitro Distribution of Plasmodium Falciparum Susceptibility to Piperaquine and Pyronaridine.” Malaria Journal 14 (February): 49.
 -Kaddouri- Halima- Abdoulaye Djimdé- Souleymane Dama- Aly Kodio- Mamadou Tekete- Véronique Hubert- Aminatou Koné- et al. 2008. “Baseline in Vitro Efficacy of ACT Component Drugs on Plasmodium Falciparum Clinical Isolates from Mali.” International Journal for Parasitology 38 (7): 791–98.
 ```{r}
@@ -378,90 +370,6 @@ ggsave("figures/CQ_DHA_scatter.pdf", units="cm", width=22, height=14, dpi=300)
 
 ```
 
-# IC50 distribution in 2016-17 vs 2018-23 period
-```{r}
-DHA_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, DHA) %>%
-  rename(Dihydroartemisinin = DHA) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Dihydroartemisinin,fill =year)) + scale_y_log10() +
-   geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 10, linetype="dashed", 
-                color = "red", linewidth=1) + 
-  ylab("IC50(nM)") + xlab("")+
-ggtitle("Dihydroartemisinin") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-  stat_compare_means(aes(group = year), label = "p.format", size = 4) #+
-  #stat_summary(fun.data=f, geom = "text", vjust=-0.5, col ="black", size = 2.5)
-
-Lumefantrine_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, Lumefantrine) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Lumefantrine, fill =year )) + scale_y_log10() +
-  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 150, linetype="dashed",
-                color = "red", linewidth=1) +
-  ylab("") + xlab("")+
-ggtitle("Lumefantrine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-  stat_compare_means(aes(group = year), label = "p.format", size = 4)
-
-Mefloquine_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, Mefloquine) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Mefloquine, fill =year )) + scale_y_log10() +
-  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 30, linetype="dashed",
-                color = "red", linewidth=1) +
-  ylab("") + xlab("")+
-ggtitle("Mefloquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )+
-  stat_compare_means(aes(group = year), label = "p.format", size = 4)
-
-Monodesethylamodiaquine_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, MDAQ) %>%
-  rename(Monodesethylamodiaquine = MDAQ) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Monodesethylamodiaquine, fill =year )) + scale_y_log10() +
-  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 80, linetype="dashed",
-                color = "red", linewidth=1) +
-  ylab("IC50(nM)") + xlab("")+
-ggtitle("Monodesethylamodiaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() )+
-  stat_compare_means(aes(group = year), label = "p.format", size = 4)
-
-Chloroquine_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, chloroquine) %>%
-  rename(Chloroquine = chloroquine) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Chloroquine, fill =year )) + scale_y_log10() +
-  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 100, linetype="dashed",
-                color = "red", linewidth=1) +
-  ylab("") + xlab("")+
-ggtitle("Chloroquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-  stat_compare_means(aes(group = year), label = "p.format", size = 4)
-
-Piperaquine_2016_2023_group<- IC50_before2017_after2017 %>%
-  dplyr::select(year, piperaquine) %>%
-  rename(Piperaquine = piperaquine) %>%
-  mutate(year = as.character(year))%>%
-  group_by(year) %>%
-  ggplot(aes(year, Piperaquine, fill =year )) + scale_y_log10() +
-  geom_boxplot() + scale_fill_brewer(palette = "Pastel1") +
-  geom_hline(yintercept = 135, linetype="dashed",
-                color = "red", linewidth=1) +
-  ylab("") + xlab("")+
-ggtitle("Piperaquine") + theme_classic() +theme(plot.title = element_text(hjust = 0.5), axis.text.x = element_blank(), axis.ticks.x = element_blank() ) +
-  stat_compare_means(aes(group = year), label = "p.format", size = 4)
-
-drugs_dist__2016_2023_group<- ggarrange(DHA_2016_2023_group, Lumefantrine_2016_2023_group, Mefloquine_2016_2023_group,Monodesethylamodiaquine_2016_2023_group,
-          Chloroquine_2016_2023_group,Piperaquine_2016_2023_group,
-                              ncol=3, nrow=2, common.legend = TRUE, legend="bottom")
-ggsave("figures/drug_dist_2016_2023_group_cut_off.pdf", units="cm", width=22, height=14, dpi=300)
-```
 
 ## Stats for IC50 distribution
 ```{r}
