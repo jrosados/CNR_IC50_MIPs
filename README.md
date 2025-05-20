@@ -47,7 +47,7 @@ For more details on MIPs for Drug Resistance see <https://doi.org/10.1093/infdis
 	6.5.- MDR1 haplotypes
 	6.6.- CRT_MDR1 Haplotypes
 	6.7.- Time trend of CRT_MDR1 haplotypes
-	6.8.- Grouped prevalence of CRT_MDR1 haplotypes before and after 2019
+	6.8.- Linear regression model of IC50 and CRT_MDR haplotypes over time
 
 # 7.- SNP association
 	7.1.- SNP association analysis for DHA
